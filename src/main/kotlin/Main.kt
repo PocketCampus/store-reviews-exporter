@@ -15,9 +15,51 @@ fun List<Review>?.getLatestDate(): Instant? = this?.mapNotNull {
 
 fun List<Review>?.toIdsSet(): Set<String>? = this?.mapNotNull { it[ReviewsSheet.Headers.ReviewId] }?.toSet()
 
+fun parseArgs(args: Array<String>): Triple<String, String, Set<String>> {
+    val flags = listOf("--googleSpreadsheetId", "--googlePrivateKeyPath", "--applePrivateKeyPath")
+    val helpMessage = "The arguments list should be a list of pairs <--flag> <value>, available flags: ${flags}"
+
+    if (args.size % 2 != 0) {
+        throw Error("Wrong number of arguments! $helpMessage")
+    }
+    val options = args.withIndex().mapNotNull { (index, value) ->
+        val isFlag = flags.contains(value)
+        if (index % 2 == 0) {
+            // every even index (starting at 0) argument should be a flag name
+            if (!isFlag) {
+                throw Error("Wrong argument flag at index ${index}: ${value}. Should be one of ${flags}. $helpMessage")
+            }
+            null // return pairs from the values only
+        } else {
+            // every odd index (starting at 0) should be a value
+            if (isFlag) {
+                throw Error(
+                    "Wrong argument value at index ${index}: ${value}: cannot be a flag name ${flags}. Did you forget to follow an argument flag by its value? $helpMessage"
+                )
+            }
+            args[index - 1] to value // args[index - 1] was checked to exist and be a flag at prev iteration
+        }
+    }.groupBy({ (key, _) -> key }, { (_, value) -> value })
+
+    val googleSpreadsheetId = options["--googleSpreadsheetId"]?.last() ?: throw Error("Argument --googleSpreadsheetId was not specified")
+    val googlePrivateKeyPath = options["--googlePrivateKeyPath"]?.last() ?: throw Error(
+        "Argument --googlePrivateKeyPath was not specified"
+    )
+    val applePrivateKeyPaths = options["--applePrivateKeyPath"]?.toSet() ?: throw Error(
+        "Argument --applePrivateKeyPath was not specified"
+    )
+
+    return Triple(
+        googleSpreadsheetId, googlePrivateKeyPath, applePrivateKeyPaths
+    )
+}
+
 suspend fun main(args: Array<String>) {
     val logger = getLogger()
-    val config = Config.load()
+
+    val (googleSpreadsheetId, googlePrivateKeyPath, applePrivateKeysPaths) = parseArgs(args)
+
+    val config = Config.load(googleSpreadsheetId, googlePrivateKeyPath, applePrivateKeysPaths)
     val reviewsSheet = ReviewsSheet(config.spreadsheet, "Reviews")
     val slack = Slack.getInstance()
 
@@ -28,7 +70,6 @@ suspend fun main(args: Array<String>) {
         val reviewsByCustomer =
             currentReviews.groupBy { Pair(it[ReviewsSheet.Headers.Customer], it[ReviewsSheet.Headers.Store]) }
 
-        val appleAppStore = AppleAppStore.Client(config.appleCredentials)
         val googlePlayStore = GooglePlayStore.Client(config.googleCredentials)
 
         val customerToReviews = config.apps.map { (customer, apps) ->
@@ -40,6 +81,8 @@ suspend fun main(args: Array<String>) {
                 val latest = existingReviews.getLatestDate()
 
                 logger.info { "Downloading new reviews from Apple Store for customer ${customer.name}" }
+
+                val appleAppStore = AppleAppStore.Client(apple.storeCredentials)
 
                 val fetchedReviews = appleAppStore.getCustomerReviewsWhile(apple.resourceId) {
                     val currentOldest = it.data.minOfOrNull { review -> review.attributes.createdDate }
