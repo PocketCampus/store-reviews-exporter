@@ -1,8 +1,14 @@
+import Args.Companion.toFlag
 import apis.AppleAppStore
 import apis.GoogleSheets
 import com.google.auth.oauth2.GoogleCredentials
-import utils.*
+import utils.emptyAsNull
+import utils.getLogger
+import utils.padEnd
 import java.io.File
+
+/** A row in the customer config sheet, mapped to respective headers */
+typealias CustomerConfig = Map<Config.ConfigSheet.Headers, String?>
 
 /** A strongly-typed, zero-cost abstraction for a Customer name */
 @JvmInline value class Customer(val name: String)
@@ -21,8 +27,8 @@ data class AppleApp(val resourceId: String, val storeCredentials: AppleAppStore.
 data class Config(
     val spreadsheet: GoogleSheets.Spreadsheets,
     val googleCredentials: GoogleCredentials,
-    val apps: Map<Customer, Pair<AndroidApp?, AppleApp?>>,
     val slackReviewsWebhook: String,
+    val apps: Map<Customer, Pair<AndroidApp?, AppleApp?>>,
 ) {
     companion object {
         private val logger = getLogger()
@@ -34,7 +40,8 @@ data class Config(
         suspend fun load(
             googleSpreadsheetId: String,
             googlePrivateKeyPath: String,
-            applePrivateKeysPaths: Set<String>
+            applePrivateKeysPaths: Set<String>,
+            slackWebhook: String,
         ): Config {
             val googleCredentials =
                 GoogleCredentials.fromStream(File(googlePrivateKeyPath).inputStream())
@@ -52,113 +59,104 @@ data class Config(
             val appsConfigSheet = GoogleSheets.Spreadsheets(googleSpreadsheetId, googleCredentials)
 
             val sheetsConfig = loadSheetsConfig(appsConfigSheet)
-            val appsConfig = loadAppsConfig(sheetsConfig, applePrivateKeysPaths)
+            val appsConfig = getAppsConfig(sheetsConfig, applePrivateKeysPaths)
 
-            val slackReviewsWebhook = sheetsConfig.firstOrThrow("slackReviewsWebhook")
-
-            return Config(appsConfigSheet, googleCredentials, appsConfig, slackReviewsWebhook)
+            return Config(appsConfigSheet, googleCredentials, slackWebhook, appsConfig)
         }
 
         /** Loads config from a Google Spreadsheet */
-        private suspend fun loadSheetsConfig(sheet: GoogleSheets.Spreadsheets): SheetsConfig {
+        private suspend fun loadSheetsConfig(
+            sheet: GoogleSheets.Spreadsheets
+        ): List<CustomerConfig> {
             logger.info { "Fetching apps config from ${sheet.browserUrl}" }
 
-            val configRows =
+            val rows =
                 sheet.values.get("Config").values ?: throw Error("The response config was null")
 
-            // ignore empty rows or when config key is not set in first column
-            val validRows = configRows.filter { it.isNotEmpty() && it.first().isNotEmpty() }
+            val headers = rows.first()
+            val requiredHeaders = ConfigSheet.Headers.entries.map { it.name }
+            if (!headers.containsAll(requiredHeaders)) {
+                throw Error(
+                    "The config sheet at ${sheet.browserUrl} does not contain all required config headers. \n\tSheet headers: $headers \n\tRequired headers: $requiredHeaders"
+                )
+            }
 
-            val configMap =
-                validRows.associate { row ->
-                    // first column is key name, second is description, then values
-                    row.first() to row.drop(2)
+            return rows
+                .drop(2) // remove header, description row
+                .filter { it.isNotEmpty() } // ignore empty rows
+                .map {
+                    headers
+                        // the rows should have the same length (but Google Sheets API cuts off
+                        // trailing empty cells of row so we pad)
+                        .zip(it.padEnd(headers.size, ""))
+                        // only keep columns that are under required headers
+                        .filter { (header, _) -> requiredHeaders.contains(header) }
+                        .associate { (header, value) ->
+                            ConfigSheet.Headers.valueOf(header) to value
+                        }
                 }
-
-            return SheetsConfig(configMap)
         }
 
-        /** Load apps config from a sheet */
-        private fun loadAppsConfig(
-            sheetsConfig: SheetsConfig,
+        /** Compute config per app from customer configs */
+        private fun getAppsConfig(
+            sheetsConfig: List<CustomerConfig>,
             applePrivateKeysPaths: Set<String>
         ): Map<Customer, Pair<AndroidApp?, AppleApp?>> {
-            // the following rows should have the same length (but Google Sheets API cuts off empty
-            // cells in rows, so we pad)
-            val customers = sheetsConfig.getRowOrThrow("customerName")
-            val googlePlayStorePackageNames =
-                sheetsConfig.getRowOrThrow("googlePlayStorePackageNames").padEnd(customers.size, "")
-            val appleAppResourceIds =
-                sheetsConfig.getRowOrThrow("appleAppResourceIds").padEnd(customers.size, "")
-            val gsReviewsReportsBucketsUris =
-                sheetsConfig.getRowOrThrow("gsReviewsReportsBucketsUris").padEnd(customers.size, "")
-            val appleAppStoreIssuerIds =
-                sheetsConfig.getRowOrThrow("appleAppStoreIssuerIds").padEnd(customers.size, "")
-            val appleAppStoreKeyIds =
-                sheetsConfig.getRowOrThrow("appleAppStoreKeyIds").padEnd(customers.size, "")
+            logger.info {
+                "Customers in apps config: ${sheetsConfig.map { it[ConfigSheet.Headers.CustomerName] }}"
+            }
 
-            logger.info { "Customers in apps config: $customers" }
+            return sheetsConfig.associate { row ->
+                val customerName = row[ConfigSheet.Headers.CustomerName]
+                if (customerName.isNullOrEmpty()) {
+                    throw Error(
+                        "Spreadsheet config error: the customer name must be specified! In row $row"
+                    )
+                }
 
-            return zip(
-                    customers,
-                    googlePlayStorePackageNames,
-                    appleAppResourceIds,
-                    gsReviewsReportsBucketsUris,
-                    appleAppStoreIssuerIds,
-                    appleAppStoreKeyIds
-                )
-                .associate { (name, packageName, resourceId, reportsBucketUri, issuerId, keyId) ->
-                    if (name.isEmpty()) {
-                        throw Error("Spreadsheet config error: the customer name must be specified! In column containing $packageName, $resourceId, $reportsBucketUri, $issuerId, $keyId")
+                val packageName = row[ConfigSheet.Headers.GooglePlayStorePackageName]
+                val reportsBucketUri =
+                    row[ConfigSheet.Headers.GooglePlayStoreReviewsReportsBucketUri]
+                val resourceId = row[ConfigSheet.Headers.AppleAppStoreResourceId]
+                val issuerId = row[ConfigSheet.Headers.AppleAppStoreConnectIssuerId]
+                val keyId = row[ConfigSheet.Headers.AppleAppStoreKeyId]
+
+                val android =
+                    packageName.emptyAsNull()?.let {
+                        AndroidApp(it, reportsBucketUri.emptyAsNull())
                     }
 
-                    val android =
-                        packageName.emptyAsNull()?.let {
-                            AndroidApp(packageName, reportsBucketUri.emptyAsNull())
-                        }
-                    val apple =
-                        resourceId.emptyAsNull()?.let {
-                            if (keyId.isEmpty() || issuerId.isEmpty()) {
-                                throw Error("Spreadsheet config error: the Apple App Store key ID and issuer ID must be specified if the apple resource ID is set ($resourceId)! In column of customer $name")
-                            }
-                            val privateKeyPath =
-                                applePrivateKeysPaths.find { it.contains(keyId) }
-                                    ?: throw Error(
-                                        "No Apple App Store Connect private key path specified for $name with resource ID " +
-                                            "$resourceId (issuer ID: $issuerId, key ID: $keyId from spreadsheet config). Did you " +
-                                            "provide the corresponding key file path with --applePrivateKeyPath and is the file " +
-                                            "correctly named AuthKey_<$keyId>.p8 ?"
-                                    )
-                            AppleApp(
-                                resourceId,
-                                AppleAppStore.ConnectCredentials(privateKeyPath, keyId, issuerId)
+                val apple =
+                    resourceId.emptyAsNull()?.let {
+                        if (keyId.isNullOrEmpty() || issuerId.isNullOrEmpty()) {
+                            throw Error(
+                                "Spreadsheet config error: the Apple App Store key ID and issuer ID must be specified if the apple resource ID is set ($resourceId)! In row $row"
                             )
                         }
+                        val privateKeyPath =
+                            applePrivateKeysPaths.find { path -> path.contains(keyId) }
+                                ?: throw Error(
+                                    "No Apple App Store Connect private key path specified for $packageName with resource ID $resourceId (issuer ID: $issuerId, key ID: $keyId from spreadsheet config). Did you provide the corresponding key file path with ${Args::applePrivateKeyPath.toFlag()} and is the file correctly named AuthKey_<$keyId>.p8 ?"
+                                )
+                        AppleApp(
+                            it,
+                            AppleAppStore.ConnectCredentials(privateKeyPath, keyId, issuerId)
+                        )
+                    }
 
-                    Customer(name) to Pair(android, apple)
-                }
+                Customer(customerName) to Pair(android, apple)
+            }
         }
+    }
 
-        /**
-         * Helper to read config from a Google Spreadsheet Represents a sheet grid as key-values,
-         * where the key is a given column and the values any number of columns specified at
-         * instantiation
-         */
-        class SheetsConfig(private val configMap: Map<String, List<String>>) {
-            /**
-             * Reads the first value cell for a given config row, throws if config key is missing or
-             * if value is null or empty
-             */
-            fun firstOrThrow(key: String) =
-                configMap[key]?.first().emptyAsNull()
-                    ?: throw Error("Config with key $key is not defined")
-
-            /**
-             * Reads the rest of the config row (i.e. all values cells) as value list, throws if
-             * config key is missing
-             */
-            fun getRowOrThrow(key: String) =
-                configMap[key] ?: throw Error("Config with key $key is not defined")
+    class ConfigSheet {
+        enum class Headers {
+            CustomerName,
+            GooglePlayStorePackageName,
+            GooglePlayStoreReviewsReportsBucketUri,
+            AppleAppStoreResourceId,
+            AppleAppStoreConnectIssuerId,
+            AppleAppStoreKeyId,
         }
     }
 }

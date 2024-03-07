@@ -1,3 +1,4 @@
+import Args.Companion.toFlag
 import ReviewsSheet.Companion.rowOf
 import apis.*
 import com.slack.api.Slack
@@ -7,17 +8,48 @@ import kotlinx.datetime.TimeZone
 import kotlinx.datetime.toLocalDateTime
 import utils.*
 import kotlin.math.roundToInt
+import kotlin.reflect.KProperty
+import kotlin.reflect.full.declaredMemberProperties
+import kotlin.reflect.full.memberProperties
 
+/**
+ * Extension function to get the review with the latest date from a list
+ */
 fun List<Review>?.getLatestDate(): Instant? = this?.mapNotNull {
     val date = it[ReviewsSheet.Headers.Date]
     if (date != null) Instant.parse(date) else null
 }?.max()
 
+/**
+ * Extension function to convert a list of reviews into a non-null set of review IDs
+ */
 fun List<Review>?.toIdsSet(): Set<String>? = this?.mapNotNull { it[ReviewsSheet.Headers.ReviewId] }?.toSet()
 
-fun parseArgs(args: Array<String>): Triple<String, String, Set<String>> {
-    val flags = listOf("--googleSpreadsheetId", "--googlePrivateKeyPath", "--applePrivateKeyPath")
-    val helpMessage = "The arguments list should be a list of pairs <--flag> <value>, available flags: ${flags}"
+/**
+ * Describes the CLI arguments
+ */
+data class Args(
+    val googleSpreadsheetId: String,
+    val googlePrivateKeyPath: String,
+    val applePrivateKeyPath: Set<String>,
+    val slackWebhook: String,
+) {
+    companion object {
+        /**
+         * Reflection-based extension function to stringify an argument name as a flag
+         */
+        fun <T> KProperty<T>.toFlag(): String = "--${this.name}"
+
+        /**
+         * Returns the available flags of the programs, derived by reflection from the properties
+         */
+        fun getFlags() = Args::class.memberProperties.map { it.toFlag() }
+    }
+}
+
+fun parseArgs(args: Array<String>): Args {
+    val flags = Args.getFlags()
+    val helpMessage = "The arguments list should be a list of pairs <--flag> <value>, available flags: $flags"
 
     if (args.size % 2 != 0) {
         throw Error("Wrong number of arguments! $helpMessage")
@@ -39,27 +71,24 @@ fun parseArgs(args: Array<String>): Triple<String, String, Set<String>> {
             }
             args[index - 1] to value // args[index - 1] was checked to exist and be a flag at prev iteration
         }
-    }.groupBy({ (key, _) -> key }, { (_, value) -> value })
+    }.groupBy({ (key, _) -> key }, { (_, value) -> value }) // group all passed values by flag
 
-    val googleSpreadsheetId = options["--googleSpreadsheetId"]?.last() ?: throw Error("Argument --googleSpreadsheetId was not specified")
-    val googlePrivateKeyPath = options["--googlePrivateKeyPath"]?.last() ?: throw Error(
-        "Argument --googlePrivateKeyPath was not specified"
-    )
-    val applePrivateKeyPaths = options["--applePrivateKeyPath"]?.toSet() ?: throw Error(
-        "Argument --applePrivateKeyPath was not specified"
-    )
+    fun <V> Map<String,V>.valueList(prop: KProperty<Any>) = this[prop.toFlag()] ?: throw Error("Argument ${prop.toFlag()} was not specified")
 
-    return Triple(
-        googleSpreadsheetId, googlePrivateKeyPath, applePrivateKeyPaths
+    return Args(
+        options.valueList(Args::googleSpreadsheetId).last(),
+        options.valueList(Args::googlePrivateKeyPath).last(),
+        options.valueList(Args::applePrivateKeyPath).toSet(),
+        options.valueList(Args::slackWebhook).last(),
     )
 }
 
 suspend fun main(args: Array<String>) {
     val logger = getLogger()
 
-    val (googleSpreadsheetId, googlePrivateKeyPath, applePrivateKeysPaths) = parseArgs(args)
+    val (googleSpreadsheetId, googlePrivateKeyPath, applePrivateKeysPaths, slackWebhook) = parseArgs(args)
 
-    val config = Config.load(googleSpreadsheetId, googlePrivateKeyPath, applePrivateKeysPaths)
+    val config = Config.load(googleSpreadsheetId, googlePrivateKeyPath, applePrivateKeysPaths, slackWebhook)
     val reviewsSheet = ReviewsSheet(config.spreadsheet, "Reviews")
     val slack = Slack.getInstance()
 
