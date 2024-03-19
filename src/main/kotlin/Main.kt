@@ -49,7 +49,7 @@ data class Args(
 
 fun parseArgs(args: Array<String>): Args {
     val flags = Args.getFlags()
-    val helpMessage = "The arguments list should be a list of pairs <--flag> <value>, available flags: $flags"
+    val helpMessage = "The arguments list should be a list of pairs <--flag> <value>, available flags: $flags, current arguments: ${args.toList()}"
 
     if (args.size % 2 != 0) {
         throw Error("Wrong number of arguments! $helpMessage")
