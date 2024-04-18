@@ -29,9 +29,9 @@ pipeline {
             steps {
                 // Execute Gradle run task
                 /* List the environment variable names defined above here by repeating the applePrivateKeyPath flag e.g.
-                sh './gradlew run --args "--googleSpreadsheetId $GOOGLE_SPREADSHEET_ID --googlePrivateKeyPath $GOOGLE_KEY_FILE --slackWebhook $SLACK_WEBHOOK --applePrivateKeyPath $APPLE_KEY_FILE_AB1234C5DE --applePrivateKeyPath $APPLE_KEY_FILE_FG5789H0IJ"'
+                sh './gradlew run --args "--slackWebhook $SLACK_WEBHOOK --googleSpreadsheetId $GOOGLE_SPREADSHEET_ID --googlePrivateKeyPath \'$GOOGLE_KEY_FILE\' --applePrivateKeyPath \'$APPLE_KEY_FILE_AB1234C5DE\' --applePrivateKeyPath \'$APPLE_KEY_FILE_FG5789H0IJ\'"'
                 */
-                sh './gradlew run --args="--googleSpreadsheetId $GOOGLE_SPREADSHEET_ID --googlePrivateKeyPath $GOOGLE_KEY_FILE --slackWebhook $SLACK_WEBHOOK --applePrivateKeyPath <env-var-name>"'
+                sh './gradlew run --args="--slackWebhook $SLACK_WEBHOOK --googleSpreadsheetId $GOOGLE_SPREADSHEET_ID --googlePrivateKeyPath \'$GOOGLE_KEY_FILE\' --applePrivateKeyPath \'<env-var-name>\'"'
             }
         }
     }
