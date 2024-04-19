@@ -4,6 +4,8 @@ import apis.GooglePlayStore
 import apis.GoogleSheets
 import apis.GoogleSheets.Spreadsheets.Values.ValueRange
 import io.ktor.http.*
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
 import utils.getLogger
 
 typealias Review = Map<ReviewsSheet.Headers, String?>
@@ -95,7 +97,7 @@ class ReviewsSheet(val spreadsheet: GoogleSheets.Spreadsheets, val sheetName: St
                 Headers.AppId to packageName,
                 Headers.ReviewId to googleReview.reviewId,
                 Headers.Date to review?.lastModified.toString(),
-                Headers.Body to review?.text.toString(),
+                Headers.Body to review?.text?.trim(),
                 Headers.Rating to review?.starRating.toString(),
                 Headers.Author to googleReview.authorName,
                 Headers.Territory to review?.reviewerLanguage.toString(),
@@ -118,7 +120,7 @@ class ReviewsSheet(val spreadsheet: GoogleSheets.Spreadsheets, val sheetName: St
                 Headers.RamMb to review?.deviceMetadata?.ramMb.toString(),
                 Headers.ReplyDate to reply?.lastModified.toString(),
                 Headers.ReplyText to reply?.text.toString(),
-                Headers.Misc to googleReview.comments.toString(),
+                Headers.Misc to Json.encodeToString(googleReview.comments),
             )
         }
 

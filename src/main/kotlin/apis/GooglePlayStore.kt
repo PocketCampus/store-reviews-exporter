@@ -10,6 +10,7 @@ import io.ktor.client.plugins.logging.*
 import io.ktor.client.request.*
 import io.ktor.http.*
 import io.ktor.serialization.kotlinx.json.*
+import kotlinx.datetime.Instant
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import org.apache.commons.csv.CSVFormat
@@ -124,6 +125,8 @@ interface GooglePlayStore {
             }
             return nanos.compareTo(other.nanos)
         }
+
+        override fun toString(): String = Instant.fromEpochSeconds(seconds.toLong(), nanos).toString()
     }
 
     /**
