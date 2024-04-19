@@ -106,10 +106,10 @@ interface GooglePlayStore {
         val androidOsVersion: Int,
         val appVersionCode: Int,
         val appVersionName: String,
-        val thumbsUpCount: Int,
-        val thumbsDownCount: Int,
+        val thumbsUpCount: Int? = null,
+        val thumbsDownCount: Int? = null,
         val deviceMetadata: DeviceMetadata,
-        val originalText: String,
+        val originalText: String? = null,
     )
 
     /**
@@ -131,17 +131,17 @@ interface GooglePlayStore {
      */
     @Serializable
     data class DeviceMetadata(
-        val productName: String,
-        val manufacturer: String,
-        val deviceClass: String,
-        val screenWidthPx: Int,
-        val screenHeightPx: Int,
-        val nativePlatform: String,
-        val screenDensityDpi: Int,
-        val glEsVersion: Int,
-        val cpuModel: String,
-        val cpuMake: String,
-        val ramMb: Int,
+        val productName: String? = null,
+        val manufacturer: String? = null,
+        val deviceClass: String? = null,
+        val screenWidthPx: Int? = null,
+        val screenHeightPx: Int? = null,
+        val nativePlatform: String? = null,
+        val screenDensityDpi: Int? = null,
+        val glEsVersion: Int? = null,
+        val cpuModel: String? = null,
+        val cpuMake: String? = null,
+        val ramMb: Int? = null,
     )
 
     /**
