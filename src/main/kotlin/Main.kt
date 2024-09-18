@@ -2,6 +2,9 @@ import Args.Companion.toFlag
 import ReviewsSheet.Companion.rowOf
 import apis.*
 import com.slack.api.Slack
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.runBlocking
 import kotlinx.datetime.Clock
 import kotlinx.datetime.Instant
 import kotlinx.datetime.TimeZone
@@ -9,7 +12,6 @@ import kotlinx.datetime.toLocalDateTime
 import utils.*
 import kotlin.math.roundToInt
 import kotlin.reflect.KProperty
-import kotlin.reflect.full.declaredMemberProperties
 import kotlin.reflect.full.memberProperties
 
 /**
@@ -43,12 +45,12 @@ data class Args(
         /**
          * Returns the available flags of the programs, derived by reflection from the properties
          */
-        fun getFlags() = Args::class.memberProperties.map { it.toFlag() }
+        fun getAvailableFlags() = Args::class.memberProperties.map { it.toFlag() }
     }
 }
 
 fun parseArgs(args: Array<String>): Args {
-    val flags = Args.getFlags()
+    val flags = Args.getAvailableFlags()
     val helpMessage = "The arguments list should be a list of pairs <--flag> <value>, available flags: $flags, current arguments: ${args.toList()}"
 
     if (args.size % 2 != 0) {
@@ -83,256 +85,292 @@ fun parseArgs(args: Array<String>): Args {
     )
 }
 
-suspend fun main(args: Array<String>) {
-    val logger = getLogger()
+fun main(args: Array<String>) {
+    runBlocking {
+        val slack = Slack.getInstance()
+        val (googleSpreadsheetId, googlePrivateKeyPath, applePrivateKeysPaths, slackWebhook) = parseArgs(args)
 
-    val (googleSpreadsheetId, googlePrivateKeyPath, applePrivateKeysPaths, slackWebhook) = parseArgs(args)
+        try {
+            val logger = getLogger()
 
-    val config = Config.load(googleSpreadsheetId, googlePrivateKeyPath, applePrivateKeysPaths, slackWebhook)
-    val reviewsSheet = ReviewsSheet(config.spreadsheet, "Reviews")
-    val slack = Slack.getInstance()
+            val config = Config.load(googleSpreadsheetId, googlePrivateKeyPath, applePrivateKeysPaths)
+            val reviewsSheet = ReviewsSheet(config.spreadsheet, "Reviews")
+            val (sheetHeaders, currentReviews) = reviewsSheet.getContent()
+            logger.info { "${currentReviews.size} reviews loaded from reviews sheet" }
 
-    try {
-        val (sheetHeaders, currentReviews) = reviewsSheet.getContent()
-        logger.info { "${currentReviews.size} reviews loaded from reviews sheet" }
+            val reviewsByCustomer =
+                currentReviews.groupBy { Pair(it[ReviewsSheet.Headers.Customer], it[ReviewsSheet.Headers.Store]) }
 
-        val reviewsByCustomer =
-            currentReviews.groupBy { Pair(it[ReviewsSheet.Headers.Customer], it[ReviewsSheet.Headers.Store]) }
+            val googlePlayStore = GooglePlayStore.Client(config.googleCredentials)
 
-        val googlePlayStore = GooglePlayStore.Client(config.googleCredentials)
+            val results = config.apps.map { (customer, apps) ->
+                async {
+                    try {
+                        val (google, apple) = apps
+                        logger.info { "Processing reviews for customer ${customer.name}" }
 
-        val customerToReviews = config.apps.map { (customer, apps) ->
-            val (google, apple) = apps
-            logger.info { "Processing reviews for customer ${customer.name}" }
+                        val appleReviews = if (apple == null) listOf() else {
+                            val existingReviews = reviewsByCustomer[Pair(customer.name, ReviewsSheet.Stores.Apple.name)]
+                            val latest = existingReviews.getLatestDate()
 
-            val appleReviews = if (apple == null) listOf() else {
-                val existingReviews = reviewsByCustomer[Pair(customer.name, ReviewsSheet.Stores.Apple.name)]
-                val latest = existingReviews.getLatestDate()
+                            logger.info { "Downloading new reviews from Apple Store for customer ${customer.name}" }
 
-                logger.info { "Downloading new reviews from Apple Store for customer ${customer.name}" }
+                            val appleAppStore = AppleAppStore.Client(apple.storeCredentials)
 
-                val appleAppStore = AppleAppStore.Client(apple.storeCredentials)
-
-                val fetchedReviews = appleAppStore.getCustomerReviewsWhile(apple.resourceId) {
-                    val currentOldest = it.data.minOfOrNull { review -> review.attributes.createdDate }
-                    if (currentOldest == null || latest == null) true
-                    else currentOldest >= latest
-                }
-                val newReviews = fetchedReviews.distinctFrom(existingReviews.toIdsSet()) { it.id }
-                    .map { rowOf(customer, apple.resourceId, it) }
-
-                logger.info { "Found ${newReviews.size} new reviews from Apple Store for customer ${customer.name}" }
-
-                if (newReviews.isNotEmpty()) {
-                    logger.info { "Writing new Apple Store reviews to reviews sheet ${reviewsSheet.spreadsheet.browserUrl}" }
-                    reviewsSheet.write(newReviews)
-                }
-
-                newReviews
-            }
-
-            val (googleReviews, oldGoogleReviews) = if (google == null) Pair(listOf(), listOf()) else {
-                val existingReviews = reviewsByCustomer[Pair(customer.name, ReviewsSheet.Stores.Google.name)]
-
-                val oldReviews = if (!existingReviews.isNullOrEmpty()) listOf() else {
-                    logger.info { "No Google Play Store reviews found for customer ${customer.name}" }
-                    if (google.reviewsReportsBucketUri == null) {
-                        logger.info {
-                            "No Google Cloud Storage reviews reports bucket URI specified. Previous reviews will not be imported"
-                        }
-                        listOf()
-                    } else {
-                        logger.info {
-                            "Retrieving older reviews from Google Cloud Storage bucket ${
-                                google.reviewsReportsBucketUri
-                            }"
-                        }
-
-                        val oldReviews = googlePlayStore.reviews.downloadFromReports(
-                            google.reviewsReportsBucketUri, google.packageName
-                        ).map { rowOf(customer, it) }
-
-                        logger.info {
-                            "Found ${oldReviews.size} reviews from Google Cloud Storage bucket of reviews reports"
-                        }
-
-                        if (oldReviews.isNotEmpty()) {
-                            logger.info {
-                                "Writing old Google Play Store reviews to reviews sheet ${
-                                    reviewsSheet.spreadsheet.browserUrl
-                                }"
+                            val fetchedReviews = appleAppStore.getCustomerReviewsWhile(apple.resourceId) {
+                                val currentOldest = it.data.minOfOrNull { review -> review.attributes.createdDate }
+                                if (currentOldest == null || latest == null) true
+                                else currentOldest >= latest
                             }
-                            reviewsSheet.write(oldReviews)
+                            val newReviews = fetchedReviews.distinctFrom(existingReviews.toIdsSet()) { it.id }
+                                .map { rowOf(customer, apple.resourceId, it) }
+
+                            logger.info { "Found ${newReviews.size} new reviews from Apple Store for customer ${customer.name}" }
+
+                            if (newReviews.isNotEmpty()) {
+                                logger.info { "Writing new Apple Store reviews to reviews sheet ${reviewsSheet.spreadsheet.browserUrl}" }
+                                reviewsSheet.write(newReviews)
+                            }
+
+                            newReviews
                         }
-                        oldReviews
-                    }
-                }
 
-                logger.info { "Downloading new reviews from Google Play Store for customer ${customer.name}" }
+                        val (googleReviews, oldGoogleReviews) = if (google == null) Pair(listOf(), listOf()) else {
+                            val existingReviews =
+                                reviewsByCustomer[Pair(customer.name, ReviewsSheet.Stores.Google.name)]
 
-                val fetchedReviews = googlePlayStore.reviews.listAll(google.packageName)
-                val newReviews = fetchedReviews.distinctFrom(existingReviews.toIdsSet()) { it.reviewId }
-                    .map { rowOf(customer, google.packageName, it) }
+                            val oldReviews = if (!existingReviews.isNullOrEmpty()) listOf() else {
+                                logger.info { "No Google Play Store reviews found for customer ${customer.name}" }
+                                if (google.reviewsReportsBucketUri == null) {
+                                    logger.info {
+                                        "No Google Cloud Storage reviews reports bucket URI specified. Previous reviews will not be imported"
+                                    }
+                                    listOf()
+                                } else {
+                                    logger.info {
+                                        "Retrieving older reviews from Google Cloud Storage bucket ${
+                                            google.reviewsReportsBucketUri
+                                        }"
+                                    }
 
-                logger.info { "Found ${newReviews.size} new reviews from Google Play Store for customer ${customer.name}" }
+                                    val oldReviews = googlePlayStore.reviews.downloadFromReports(
+                                        google.reviewsReportsBucketUri, google.packageName
+                                    ).map { rowOf(customer, it) }
 
-                if (newReviews.isNotEmpty()) {
-                    logger.info {
-                        "Writing new Google Play Store reviews to reviews sheet ${reviewsSheet.spreadsheet.browserUrl}"
-                    }
-                    reviewsSheet.write(newReviews)
-                }
+                                    logger.info {
+                                        "Found ${oldReviews.size} reviews from Google Cloud Storage bucket of reviews reports"
+                                    }
 
-                Pair(newReviews, oldReviews)
-            }
-
-            logger.info(
-                "${customer.name}: wrote ${appleReviews.size} new Apple App Store reviews and ${googleReviews.size} new Google Play Store reviews",
-                "\t Apple reviews IDs: ${appleReviews.map { it[ReviewsSheet.Headers.ReviewId] }}",
-                "\t Google reviews IDs: ${googleReviews.map { it[ReviewsSheet.Headers.ReviewId] }}",
-                "\t Retrieved ${oldGoogleReviews.size} reviews from Google Play Store review reports in Cloud Storage"
-            )
-
-            customer to mapOf(
-                "Apple App Store" to appleReviews,
-                "Google Play Store" to googleReviews,
-                "Google Play Store Review Reports" to oldGoogleReviews
-            )
-        }.toMap()
-
-        val writtenReviews = customerToReviews.filterValues {
-            it.values.any { reviews -> reviews.isNotEmpty() }
-        }
-
-        val counts = writtenReviews.mapValues {
-            it.value.mapValues { entry -> entry.value.size }
-        }
-
-        val totalCount = counts.values.sumOf { it.values.sum() }
-
-        if (totalCount > 0) {
-            val averages = writtenReviews.mapValues {
-                it.value.mapValues { entry ->
-                    entry.value.mapNotNull {
-                        tryOrNull {
-                            Integer.parseInt(
-                                it[ReviewsSheet.Headers.Rating]
-                            )
-                        }
-                    }.average().nanAsNull()
-                }
-            }
-
-            val customerAverage = averages.mapValues {
-                it.value.values.filterNotNull().average().nanAsNull()
-            }
-            val totalAverage = customerAverage.values.filterNotNull().average().nanAsNull()
-
-            logger.info { "Sending message with imported reviews to Slack" }
-
-            val response = slack.send(config.slackReviewsWebhook) {
-                fun Int?.toRatingStars(): String = if (this == null) "" else "★".repeat(this) + "☆".repeat(5 - this)
-
-                fun Double?.toRatingStars(): String =
-                    this?.let { if (it.isNaN()) null else it.roundToInt() }.toRatingStars()
-
-                fun String?.toRatingStars(): String = tryOrNull { this?.toDouble() }.toRatingStars()
-
-                blocks {
-                    section {
-                        markdownText(buildString {
-                            append("*Beep boop 🤖 I have found new reviews* (last run on ${
-                                Clock.System.now().toLocalDateTime(TimeZone.UTC).let {
-                                    "${
-                                        it.month.toString().capitalized()
-                                    } ${
-                                        it.dayOfMonth
-                                    }, ${it.year} at ${it.hour}:${it.minute})"
+                                    if (oldReviews.isNotEmpty()) {
+                                        logger.info {
+                                            "Writing old Google Play Store reviews to reviews sheet ${
+                                                reviewsSheet.spreadsheet.browserUrl
+                                            }"
+                                        }
+                                        reviewsSheet.write(oldReviews)
+                                    }
+                                    oldReviews
                                 }
-                            }")
-                            append("\n\n")
-                            append(
-                                "\n⭐ Processed *$totalCount reviews* to the <${
-                                    reviewsSheet.spreadsheet.browserUrl
-                                }|PocketCampus App Reviews sheet>"
+                            }
+
+                            logger.info { "Downloading new reviews from Google Play Store for customer ${customer.name}" }
+
+                            val fetchedReviews = googlePlayStore.reviews.listAll(google.packageName)
+                            val newReviews = fetchedReviews.distinctFrom(existingReviews.toIdsSet()) { it.reviewId }
+                                .map { rowOf(customer, google.packageName, it) }
+
+                            logger.info { "Found ${newReviews.size} new reviews from Google Play Store for customer ${customer.name}" }
+
+                            if (newReviews.isNotEmpty()) {
+                                logger.info {
+                                    "Writing new Google Play Store reviews to reviews sheet ${reviewsSheet.spreadsheet.browserUrl}"
+                                }
+                                reviewsSheet.write(newReviews)
+                            }
+
+                            Pair(newReviews, oldReviews)
+                        }
+
+                        logger.info(
+                            "${customer.name}: wrote ${appleReviews.size} new Apple App Store reviews and ${googleReviews.size} new Google Play Store reviews",
+                            "\t Apple reviews IDs: ${appleReviews.map { it[ReviewsSheet.Headers.ReviewId] }}",
+                            "\t Google reviews IDs: ${googleReviews.map { it[ReviewsSheet.Headers.ReviewId] }}",
+                            "\t Retrieved ${oldGoogleReviews.size} reviews from Google Play Store review reports in Cloud Storage"
+                        )
+
+                        customer to Result.success(
+                            mapOf(
+                                "Apple App Store" to appleReviews,
+                                "Google Play Store" to googleReviews,
+                                "Google Play Store Review Reports" to oldGoogleReviews
                             )
-                            append(
-                                "\nAverage rating over all reviews: ${totalAverage.toRatingStars()} (${
-                                    String.format(
-                                        "%.2f", totalAverage
-                                    )
-                                })\n"
-                            )
-                        })
+                        )
+                    } catch (e: Throwable) {
+                        customer to Result.failure(e);
                     }
-                    divider()
-                    writtenReviews.forEach { app ->
-                        val (customer, platforms) = app
+                }
+            }.awaitAll().toMap()
+
+            val (successes, failures) = results.entries.partition { it.value.isSuccess }.toList().map { it.associate { (key, value) -> key to value } }
+            val writtenReviews = successes.mapValues { it.value.getOrThrow() } // never throws since we just filtered isSuccess
+            val errors = failures.mapValues { it.value.exceptionOrNull() } // never null since we just filtered !isSuccess
+
+            val counts = writtenReviews.mapValues {
+                it.value.mapValues { entry -> entry.value.size }
+            }
+
+            val totalCount = counts.values.sumOf { it.values.sum() }
+
+            if (totalCount > 0) {
+                val averages = writtenReviews.mapValues {
+                    it.value.mapValues { entry ->
+                        entry.value.mapNotNull {
+                            tryOrNull {
+                                Integer.parseInt(
+                                    it[ReviewsSheet.Headers.Rating]
+                                )
+                            }
+                        }.average().nanAsNull()
+                    }
+                }
+
+                val customerAverage = averages.mapValues {
+                    it.value.values.filterNotNull().average().nanAsNull()
+                }
+                val totalAverage = customerAverage.values.filterNotNull().average().nanAsNull()
+
+                logger.info { "Sending message with imported reviews to Slack" }
+
+                val response = slack.send(slackWebhook) {
+                    fun Int?.toRatingStars(): String = if (this == null) "" else "★".repeat(this) + "☆".repeat(5 - this)
+
+                    fun Double?.toRatingStars(): String =
+                        this?.let { if (it.isNaN()) null else it.roundToInt() }.toRatingStars()
+
+                    fun String?.toRatingStars(): String = tryOrNull { this?.toDouble() }.toRatingStars()
+
+                    blocks {
                         section {
                             markdownText(buildString {
-                                append("📱 *${customer.name}*")
+                                append("*Beep boop 🤖 I have found new reviews* (last run on ${
+                                    Clock.System.now().toLocalDateTime(TimeZone.UTC).let {
+                                        "${
+                                            it.month.toString().capitalized()
+                                        } ${
+                                            it.dayOfMonth
+                                        }, ${it.year} at ${it.hour}:${it.minute})"
+                                    }
+                                }")
+                                append("\n\n")
                                 append(
-                                    "\nAverage rating of imported reviews for this customer: ${customerAverage[customer].toRatingStars()} (${
+                                    "\n⭐ Processed *$totalCount reviews* to the <${
+                                        reviewsSheet.spreadsheet.browserUrl
+                                    }|PocketCampus App Reviews sheet>"
+                                )
+                                append(
+                                    "\nAverage rating over all reviews: ${totalAverage.toRatingStars()} (${
                                         String.format(
                                             "%.2f", totalAverage
                                         )
-                                    })"
+                                    })\n"
                                 )
                             })
                         }
-                        platforms.entries.filter { it.value.isNotEmpty() }.forEach { entry ->
-                            val (platform, reviews) = entry
-                            val sortedReviews = reviews.sortedByDescending { it[ReviewsSheet.Headers.Date] }
-                            val dateRange = sortedReviews.mapNotNull {
-                                it[ReviewsSheet.Headers.Date]?.let { date ->
-                                    Instant.parse(date).toLocalDateTime(TimeZone.UTC).date
-                                }
-                            }.let { it.min()..it.max() }
-                            val lastReviews = sortedReviews.take(3)
-                            val average = averages[customer]?.get(platform)
-
+                        divider()
+                        writtenReviews.forEach { app ->
+                            val (customer, platforms) = app
                             section {
                                 markdownText(buildString {
-                                    append("🛍️ Found *${reviews.size}* reviews on *$platform*")
-                                    append("\nPeriod: ${dateRange.start} to ${dateRange.endInclusive}")
+                                    append("📱 *${customer.name}*")
                                     append(
-                                        "\nAverage rating of imported reviews for this platform: ${
-                                            average.toRatingStars()
-                                        } (${
+                                        "\nAverage rating of imported reviews for this customer: ${customerAverage[customer].toRatingStars()} (${
                                             String.format(
                                                 "%.2f", totalAverage
                                             )
                                         })"
                                     )
-                                    append("\nShowing ${lastReviews.size} latest reviews:")
                                 })
                             }
-                            lastReviews.forEach {
-                                divider()
+                            platforms.entries.filter { it.value.isNotEmpty() }.forEach { entry ->
+                                val (platform, reviews) = entry
+                                val sortedReviews = reviews.sortedByDescending { it[ReviewsSheet.Headers.Date] }
+                                val dateRange = sortedReviews.mapNotNull {
+                                    it[ReviewsSheet.Headers.Date]?.let { date ->
+                                        Instant.parse(date).toLocalDateTime(TimeZone.UTC).date
+                                    }
+                                }.let { it.min()..it.max() }
+                                val lastReviews = sortedReviews.take(3)
+                                val average = averages[customer]?.get(platform)
+
                                 section {
                                     markdownText(buildString {
-                                        append("*Date:* ${it[ReviewsSheet.Headers.Date]}")
-                                        append("\n*Rating:* ${it[ReviewsSheet.Headers.Rating].toRatingStars()}")
-                                        append("\n*Author:* ${it[ReviewsSheet.Headers.Author]}")
-                                        append("\n*Review ID:* ${it[ReviewsSheet.Headers.ReviewId]}")
-                                        append("\n*Title:* ${it[ReviewsSheet.Headers.Title]}")
-                                        append("\n> ${it[ReviewsSheet.Headers.Body]?.replace("\n", "\n> ")}")
+                                        append("🛍️ Found *${reviews.size}* reviews on *$platform*")
+                                        append("\nPeriod: ${dateRange.start} to ${dateRange.endInclusive}")
+                                        append(
+                                            "\nAverage rating of imported reviews for this platform: ${
+                                                average.toRatingStars()
+                                            } (${
+                                                String.format(
+                                                    "%.2f", totalAverage
+                                                )
+                                            })"
+                                        )
+                                        append("\nShowing ${lastReviews.size} latest reviews:")
                                     })
                                 }
+                                lastReviews.forEach {
+                                    divider()
+                                    section {
+                                        markdownText(buildString {
+                                            append("*Date:* ${it[ReviewsSheet.Headers.Date]}")
+                                            append("\n*Rating:* ${it[ReviewsSheet.Headers.Rating].toRatingStars()}")
+                                            append("\n*Author:* ${it[ReviewsSheet.Headers.Author]}")
+                                            append("\n*Review ID:* ${it[ReviewsSheet.Headers.ReviewId]}")
+                                            append("\n*Title:* ${it[ReviewsSheet.Headers.Title]}")
+                                            append("\n> ${it[ReviewsSheet.Headers.Body]?.replace("\n", "\n> ")}")
+                                        })
+                                    }
+                                }
                             }
+                            divider()
                         }
-                        divider()
                     }
+                }
+
+                logger.info { response.toString() }
+                if (response == null || response.code >= 400) {
+                    throw Error("Failed to send Slack message: " + response?.body)
                 }
             }
 
-            logger.info { response.toString() }
-            if (response == null || response.code >= 400) {
-                throw Error("Failed to send Slack message: " + response?.body)
+            if (errors.isNotEmpty()) {
+                val response = slack.send(slackWebhook) {
+                    blocks {
+                        section {
+                            markdownText("🤖⚠️ The app reviews tool encountered the following errors while fetching reviews for those customers:")
+                        }
+                        errors.forEach {
+                            val (customer, error) = it
+                            section {
+                                markdownText(buildString {
+                                    append("📱 *${customer.name}*")
+                                    append("🛑 ${error?.message}")
+                                })
+                            }
+                            divider()
+                        }
+                    }
+                }
+
+                logger.info { response.toString() }
+                if (response == null || response.code >= 400) {
+                    throw Error("Failed to send Slack message: " + response?.body)
+                }
             }
+        } catch (error: Throwable) {
+            slack.send(slackWebhook, "🤖⚠️ The app reviews tool encountered an error:\n${error.message}")
+            throw error
         }
-    } catch (error: Throwable) {
-        slack.send(config.slackReviewsWebhook, "🤖⚠️ The app reviews tool encountered an error:\n${error.message}")
-        throw error
     }
 }
+
