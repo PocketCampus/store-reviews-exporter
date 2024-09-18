@@ -27,7 +27,6 @@ data class AppleApp(val resourceId: String, val storeCredentials: AppleAppStore.
 data class Config(
     val spreadsheet: GoogleSheets.Spreadsheets,
     val googleCredentials: GoogleCredentials,
-    val slackReviewsWebhook: String,
     val apps: Map<Customer, Pair<AndroidApp?, AppleApp?>>,
 ) {
     companion object {
@@ -40,8 +39,7 @@ data class Config(
         suspend fun load(
             googleSpreadsheetId: String,
             googlePrivateKeyPath: String,
-            applePrivateKeysPaths: Set<String>,
-            slackWebhook: String,
+            applePrivateKeysPaths: Set<String>
         ): Config {
             val googleCredentials =
                 GoogleCredentials.fromStream(File(googlePrivateKeyPath).inputStream())
@@ -61,7 +59,7 @@ data class Config(
             val sheetsConfig = loadSheetsConfig(appsConfigSheet)
             val appsConfig = getAppsConfig(sheetsConfig, applePrivateKeysPaths)
 
-            return Config(appsConfigSheet, googleCredentials, slackWebhook, appsConfig)
+            return Config(appsConfigSheet, googleCredentials, appsConfig)
         }
 
         /** Loads config from a Google Spreadsheet */
