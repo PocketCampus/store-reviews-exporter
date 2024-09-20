@@ -1,10 +1,8 @@
-import Args.Companion.toFlag
 import apis.AppleAppStore
 import apis.GoogleSheets
 import com.google.auth.oauth2.GoogleCredentials
-import utils.emptyAsNull
-import utils.getLogger
-import utils.padEnd
+import utils.*
+import Args.Companion.toFlag
 import java.io.File
 
 /** A row in the customer config sheet, mapped to respective headers */
@@ -27,7 +25,7 @@ data class AppleApp(val resourceId: String, val storeCredentials: AppleAppStore.
 data class Config(
     val spreadsheet: GoogleSheets.Spreadsheets,
     val googleCredentials: GoogleCredentials,
-    val apps: Map<Customer, Pair<AndroidApp?, AppleApp?>>,
+    val apps: Map<Customer, Pair<Result<AndroidApp>, Result<AppleApp>>>,
 ) {
     companion object {
         private val logger = getLogger()
@@ -96,10 +94,10 @@ data class Config(
         }
 
         /** Compute config per app from customer configs */
-        private fun getAppsConfig(
+        private suspend fun getAppsConfig(
             sheetsConfig: List<CustomerConfig>,
             applePrivateKeysPaths: Set<String>
-        ): Map<Customer, Pair<AndroidApp?, AppleApp?>> {
+        ): Map<Customer, Pair<Result<AndroidApp>, Result<AppleApp>>> {
             logger.info {
                 "Customers in apps config: ${sheetsConfig.map { it[ConfigSheet.Headers.CustomerName] }}"
             }
@@ -119,28 +117,30 @@ data class Config(
                 val issuerId = row[ConfigSheet.Headers.AppleAppStoreConnectIssuerId]
                 val keyId = row[ConfigSheet.Headers.AppleAppStoreKeyId]
 
-                val android =
-                    packageName.emptyAsNull()?.let {
-                        AndroidApp(it, reportsBucketUri.emptyAsNull())
+                val android = Result.of {
+                    if (packageName.isNullOrEmpty()) {
+                        throw Error("Spreadsheet config error: Android app packageName not specified")
                     }
+                    AndroidApp(packageName, reportsBucketUri.emptyAsNull())
+                }
 
-                val apple =
-                    resourceId.emptyAsNull()?.let {
-                        if (keyId.isNullOrEmpty() || issuerId.isNullOrEmpty()) {
-                            throw Error(
-                                "Spreadsheet config error: the Apple App Store key ID and issuer ID must be specified if the apple resource ID is set ($resourceId)! In row $row"
-                            )
-                        }
-                        val privateKeyPath =
-                            applePrivateKeysPaths.find { path -> path.contains(keyId) }
-                                ?: throw Error(
-                                    "No Apple App Store Connect private key path specified for $packageName with resource ID $resourceId (issuer ID: $issuerId, key ID: $keyId from spreadsheet config). Did you provide the corresponding key file path with ${Args::applePrivateKeyPath.toFlag()} and is the file correctly named AuthKey_$keyId.p8 ?"
-                                )
-                        AppleApp(
-                            it,
-                            AppleAppStore.ConnectCredentials(privateKeyPath, keyId, issuerId)
+                val apple = Result.of {
+                    if (resourceId.isNullOrEmpty()) {
+                        throw Error("")
+                    }
+                    if (keyId.isNullOrEmpty() || issuerId.isNullOrEmpty()) {
+                        throw Error(
+                            "Spreadsheet config error: the Apple App Store key ID and issuer ID must be specified if the apple resource ID is set ($resourceId)! In row $row"
                         )
                     }
+                    val privateKeyPath = applePrivateKeysPaths.find { path -> path.contains(keyId) } ?: throw Error(
+                        "No Apple App Store Connect private key path specified for $packageName with resource ID $resourceId (issuer ID: $issuerId, key ID: $keyId from spreadsheet config). Did you provide the corresponding key file path with ${Args::applePrivateKeyPath.toFlag()} and is the file correctly named AuthKey_$keyId.p8 ?"
+                    )
+                    AppleApp(
+                        resourceId, AppleAppStore.ConnectCredentials(privateKeyPath, keyId, issuerId)
+
+                    )
+                }
 
                 Customer(customerName) to Pair(android, apple)
             }
