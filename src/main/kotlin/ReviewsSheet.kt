@@ -17,7 +17,7 @@ typealias Review = Map<ReviewsSheet.Headers, String?>
  *         Copyright (c) 2024 PocketCampus Sàrl
  */
 class ReviewsSheet(val spreadsheet: GoogleSheets.Spreadsheets, val sheetName: String) {
-    val logger = getLogger()
+    private val logger = getLogger()
 
     /**
      * String representation of stores in the sheet
@@ -65,6 +65,11 @@ class ReviewsSheet(val spreadsheet: GoogleSheets.Spreadsheets, val sheetName: St
     }
 
     companion object {
+        /*
+         * Represents null values as string in a cell
+         */
+        private const val NULL_MARKER = "<null>"
+
         /**
          * Factory of review row from an Apple CustomerReview
          */
@@ -149,7 +154,10 @@ class ReviewsSheet(val spreadsheet: GoogleSheets.Spreadsheets, val sheetName: St
          */
         private fun rowOf(values: List<String>, headers: List<String>): Review {
             val sheetRow = headers.zip(values).associate { (header, value) -> header to value }
-            return Headers.entries.associateWith { sheetRow[it.name].toString() }
+            return Headers.entries.associateWith {
+                val cellValue = sheetRow[it.name]
+                if (cellValue == NULL_MARKER) null else cellValue
+            }
         }
 
     }
@@ -178,7 +186,7 @@ class ReviewsSheet(val spreadsheet: GoogleSheets.Spreadsheets, val sheetName: St
         spreadsheet.values.append(
             ValueRange(sheetName, rows.map { row ->
                 orderedHeaders.map {
-                    row[it].toString()
+                    row[it] ?: NULL_MARKER
                 }
             })
         )

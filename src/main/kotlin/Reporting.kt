@@ -144,7 +144,7 @@ fun reportStore(store: String, result: Result<List<Review>>, blocksBuilder: Layo
           Instant.parse(date).toLocalDateTime(TimeZone.UTC).date
         }
       }.let { it.min()..it.max() }
-      val lastReviews = reviewsByRecent.take(3)
+      val lastReviews = reviewsByRecent.filter { !it[ReviewsSheet.Headers.Body].isNullOrEmpty() }.take(3)
       val stats = computeStats(reviews)
 
       section {
@@ -160,7 +160,9 @@ fun reportStore(store: String, result: Result<List<Review>>, blocksBuilder: Layo
               )
             })"
           )
-          append("\nShowing ${lastReviews.size} latest reviews:")
+          if(lastReviews.isNotEmpty()) {
+            append("\nShowing ${lastReviews.size} latest reviews with comments:")
+          }
         })
       }
       lastReviews.forEach {
@@ -170,8 +172,8 @@ fun reportStore(store: String, result: Result<List<Review>>, blocksBuilder: Layo
     }, onFailure = { error ->
       section {
         markdownText(buildString {
-          append("🤖⚠️ Encountered the following error while fetching reviews on $store:")
-          append("\n🛑 ${error.message}")
+          append("️🛑 Encountered the following error while fetching reviews on $store:")
+          append("\n```${error.message}```")
         })
       }
     })

@@ -1,10 +1,8 @@
 import ReviewsSheet.Companion.rowOf
 import apis.*
 import com.slack.api.Slack
-import kotlinx.coroutines.async
 import kotlinx.coroutines.runBlocking
 import kotlinx.datetime.Instant
-import utils.distinctFrom
 import utils.getLogger
 import utils.of
 
@@ -35,9 +33,17 @@ fun main(args: Array<String>) {
       }?.max()
 
       /**
-       * Extension function to convert a list of reviews into a non-null set of review IDs
+       * Extension function to prune existing reviews from a given list of e.g. fetched reviews
        */
-      fun List<Review>?.toIdsSet(): Set<String>? = this?.mapNotNull { it[ReviewsSheet.Headers.ReviewId] }?.toSet()
+      fun List<Review>.distinctFrom(existingReviews: List<Review>?) = existingReviews?.let {
+        val existingIdsSet = existingReviews.map { it[ReviewsSheet.Headers.ReviewId] }.toSet()
+        this.filter { review ->
+          review[ReviewsSheet.Headers.ReviewId]?.let { id ->
+            // if review has a non-null id, use it to check if id already exists
+            !existingIdsSet.contains(id)
+          } ?: !existingReviews.contains(review) // otherwise use map key + value structural equality
+        }
+      } ?: this
 
       /**
        * Helper to group the logic to fetch Apple reviews
@@ -55,9 +61,8 @@ fun main(args: Array<String>) {
           val currentOldest = it.data.minOfOrNull { review -> review.attributes.createdDate }
           if (currentOldest == null || latest == null) true
           else currentOldest >= latest
-        }
-        val newReviews =
-          fetchedReviews.distinctFrom(existingReviews.toIdsSet()) { it.id }.map { rowOf(customer, app.resourceId, it) }
+        }.map { rowOf(customer, app.resourceId, it) }
+        val newReviews = fetchedReviews.distinctFrom(existingReviews)
 
         logger.info { "Found ${newReviews.size} new reviews from Apple Store for customer ${customer.name}" }
 
@@ -98,8 +103,7 @@ fun main(args: Array<String>) {
           "Found ${archivedReviews.size} reviews from Google Cloud Storage bucket of reviews reports"
         }
 
-        val unprocessedReviews =
-          archivedReviews.distinctFrom(existingReviews.toIdsSet()) { it[ReviewsSheet.Headers.ReviewId] }
+        val unprocessedReviews = archivedReviews.distinctFrom(existingReviews)
 
         logger.info {
           "Of which ${unprocessedReviews.size} reviews are not imported from Google Cloud Storage bucket of reviews reports"
@@ -127,9 +131,9 @@ fun main(args: Array<String>) {
 
         logger.info { "Downloading new reviews from Google Play Store for customer ${customer.name}" }
 
-        val fetchedReviews = googlePlayStore.reviews.listAll(app.packageName)
-        val newReviews = fetchedReviews.distinctFrom(existingReviews.toIdsSet()) { it.reviewId }
-          .map { rowOf(customer, app.packageName, it) }
+        val fetchedReviews =
+          googlePlayStore.reviews.listAll(app.packageName).map { rowOf(customer, app.packageName, it) }
+        val newReviews = fetchedReviews.distinctFrom(existingReviews)
 
         logger.info { "Found ${newReviews.size} new reviews from Google Play Store for customer ${customer.name}" }
 
@@ -144,27 +148,23 @@ fun main(args: Array<String>) {
       }
 
       // launch all requests in parallel
-      val deferredFetches = config.apps.mapValues { (customer, apps) ->
+      val responses = config.apps.mapValues { (customer, apps) ->
         val (googleConfig, appleConfig) = apps
         logger.info { "Processing reviews for customer ${customer.name}" }
 
-        val appleReviews = async {
-          Result.of {
-            val apple = appleConfig.getOrThrow()
-            getAppleReviews(customer, apple)
-          }
+        val appleReviews = Result.of {
+          val apple = appleConfig.getOrThrow()
+          getAppleReviews(customer, apple)
         }
-        val googleReviews = async {
-          Result.of {
-            val google = googleConfig.getOrThrow()
-            getRecentGoogleReviews(customer, google)
-          }
+
+        val googleReviews = Result.of {
+          val google = googleConfig.getOrThrow()
+          getRecentGoogleReviews(customer, google)
         }
-        val archivedGoogleReviews = async {
-          Result.of {
-            val google = googleConfig.getOrThrow()
-            getArchivedGoogleReviews(customer, google)
-          }
+
+        val archivedGoogleReviews = Result.of {
+          val google = googleConfig.getOrThrow()
+          getArchivedGoogleReviews(customer, google)
         }
 
         mapOf(
@@ -174,17 +174,13 @@ fun main(args: Array<String>) {
         )
       }
 
-      // await all results before reporting
-      val responses =
-        deferredFetches.mapValues { (_, stores) -> stores.mapValues { (_, deferred) -> deferred.await() } }
-
       val results = responses.values.flatMap { it.values.map { result -> result } }
       val newReviews = results.flatMap { result ->
         result.fold(onFailure = { listOf() }, onSuccess = { reviews -> reviews })
       }
 
       // log all failures for convenience
-      val failures = results.mapNotNull { it.fold(onSuccess = { null }, onFailure = { error -> error } ) }
+      val failures = results.mapNotNull { it.fold(onSuccess = { null }, onFailure = { error -> error }) }
       failures.forEach {
         logger.error(it.toString())
       }
@@ -194,7 +190,11 @@ fun main(args: Array<String>) {
         slack.sendOrThrow(slackWebhook) {
           blocks {
             reportSummary(stats, reviewsSheet.spreadsheet.browserUrl, this)
-            responses.forEach { (customer, stores) ->
+          }
+        }
+        responses.forEach { (customer, stores) ->
+          slack.sendOrThrow(slackWebhook) {
+            blocks {
               reportCustomer(customer, stores, this)
             }
           }
@@ -203,7 +203,7 @@ fun main(args: Array<String>) {
 
     } catch (error: Throwable) {
       // last chance for error reporting
-      slack.sendOrLog(slackWebhook) { "🤖⚠️ The app reviews tool encountered an error:\n${error.message}" }
+      slack.sendOrLog(slackWebhook) { text("🤖⚠️ The app reviews tool encountered an error:\n${error.message}") }
       throw error
     }
   }
