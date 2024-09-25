@@ -18,9 +18,9 @@ Now that the service account has been created, we can conveniently add it to oth
 
 Create a new Google Spreadsheet with 2 sheets named "Reviews" and "Config".
 
-In the "Reviews" sheet, create a header row with the keys of your choosing from [ReviewsSheet.kt (`enum class Headers `)](src/main/kotlin/ReviewsSheet.kt). For instance:
+In the "Reviews" sheet, create a header row with the keys of your choosing from [ReviewsSheet.kt (`class Review`)](src/main/kotlin/ReviewsSheet.kt). For instance:
 
-| Customer | Store | AppId | ReviewId | Date | Title | Body | Rating | Author | Territory | Device | ThumbsUpCount | ThumbsDownCount | AndroidOsVersion | AppVersionCode | AppVersionName | DeviceProductName | DeviceManufacturer | DeviceClass | ScreenWidthPx | ScreenHeightPx | NativePlatform | ScreenDensityDpi | GlEsVersion | CpuModel | CpuMake | RamMb | ReplyText | ReplyDate | Misc | ReviewLink |
+| customer | store | appId | reviewId | date | title | body | rating | author | territory | device | thumbsUpCount | thumbsDownCount | androidOsVersion | appVersionCode | appVersionName | deviceProductName | deviceManufacturer | deviceClass | screenWidthPx | screenHeightPx | nativePlatform | screenDensityDpi | glEsVersion | cpuModel | cpuMake | ramMb | replyText | replyDate | misc | reviewLink |
 |----------|-------|-------|----------|------|-------|------|--------|--------|-----------|--------|---------------|-----------------|------------------|----------------|----------------|-------------------|--------------------|-------------|---------------|----------------|----------------|------------------|-------------|----------|---------|-------|-----------|-----------|------|------------|
 
 In the "Config sheet", create a header row with all keys from [Config.kt (`class ConfigSheet enum class Headers`)](src/main/kotlin/Config.kt):
