@@ -31,7 +31,7 @@ interface GoogleSheets {
             }
             install(Logging) {
                 logger = Logger.SIMPLE
-                level = LogLevel.BODY
+                level = LogLevel.NONE
             }
         }
 

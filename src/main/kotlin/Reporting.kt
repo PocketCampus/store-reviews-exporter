@@ -52,7 +52,7 @@ fun computeStats(reviews: List<Review>): Stats {
   val average = reviews.mapNotNull {
     tryOrNull {
       Integer.parseInt(
-        it[ReviewsSheet.Headers.Rating]
+        it.rating
       )
     }
   }.average()
@@ -118,12 +118,12 @@ fun reportReview(review: Review, blocksBuilder: LayoutBlockDsl) {
   blocksBuilder.apply {
     section {
       markdownText(buildString {
-        append("*Date:* ${review[ReviewsSheet.Headers.Date]}")
-        append("\n*Rating:* ${review[ReviewsSheet.Headers.Rating].toRatingStars()}")
-        append("\n*Author:* ${review[ReviewsSheet.Headers.Author]}")
-        append("\n*Review ID:* ${review[ReviewsSheet.Headers.ReviewId]}")
-        append("\n*Title:* ${review[ReviewsSheet.Headers.Title]}")
-        append("\n> ${review[ReviewsSheet.Headers.Body]?.replace("\n", "\n> ")}")
+        append("*Date:* ${review.date}")
+        append("\n*Rating:* ${review.rating.toRatingStars()}")
+        append("\n*Author:* ${review.author}")
+        append("\n*Review ID:* ${review.reviewId}")
+        append("\n*Title:* ${review.title}")
+        append("\n> ${review.body?.replace("\n", "\n> ")}")
       })
     }
   }
@@ -138,13 +138,13 @@ fun reportStore(store: String, result: Result<List<Review>>, blocksBuilder: Layo
       if (reviews.isEmpty()) {
         return
       }
-      val reviewsByRecent = reviews.sortedByDescending { it[ReviewsSheet.Headers.Date] }
+      val reviewsByRecent = reviews.sortedByDescending { it.date }
       val dateRange = reviewsByRecent.mapNotNull {
-        it[ReviewsSheet.Headers.Date]?.let { date ->
+        it.date?.let { date ->
           Instant.parse(date).toLocalDateTime(TimeZone.UTC).date
         }
       }.let { it.min()..it.max() }
-      val lastReviews = reviewsByRecent.filter { !it[ReviewsSheet.Headers.Body].isNullOrEmpty() }.take(3)
+      val lastReviews = reviewsByRecent.filter { !it.body.isNullOrEmpty() }.take(3)
       val stats = computeStats(reviews)
 
       section {
@@ -160,7 +160,7 @@ fun reportStore(store: String, result: Result<List<Review>>, blocksBuilder: Layo
               )
             })"
           )
-          if(lastReviews.isNotEmpty()) {
+          if (lastReviews.isNotEmpty()) {
             append("\nShowing ${lastReviews.size} latest reviews with comments:")
           }
         })
@@ -205,7 +205,7 @@ fun reportCustomer(customer: Customer, storeReviews: Map<String, Result<List<Rev
           }
         })
       }
-      storeReviews.forEach { ( store, result) ->
+      storeReviews.forEach { (store, result) ->
         reportStore(store, result, blocksBuilder)
       }
     }

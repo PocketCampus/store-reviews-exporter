@@ -1,4 +1,3 @@
-import ReviewsSheet.Companion.rowOf
 import apis.*
 import com.slack.api.Slack
 import kotlinx.coroutines.runBlocking
@@ -19,8 +18,7 @@ fun main(args: Array<String>) {
       val (_, currentReviews) = reviewsSheet.getContent()
       logger.info { "${currentReviews.size} reviews loaded from reviews sheet" }
 
-      val reviewsByCustomer =
-        currentReviews.groupBy { Pair(it[ReviewsSheet.Headers.Customer], it[ReviewsSheet.Headers.Store]) }
+      val reviewsByCustomer = currentReviews.groupBy { Pair(it.customer, it.store) }
 
       val googlePlayStore = GooglePlayStore.Client(config.googleCredentials)
 
@@ -28,7 +26,7 @@ fun main(args: Array<String>) {
        * Extension function to get the review with the latest date from a list
        */
       fun List<Review>?.getLatestDate(): Instant? = this?.mapNotNull {
-        val date = it[ReviewsSheet.Headers.Date]
+        val date = it.date
         if (date != null) Instant.parse(date) else null
       }?.max()
 
@@ -36,12 +34,12 @@ fun main(args: Array<String>) {
        * Extension function to prune existing reviews from a given list of e.g. fetched reviews
        */
       fun List<Review>.distinctFrom(existingReviews: List<Review>?) = existingReviews?.let {
-        val existingIdsSet = existingReviews.map { it[ReviewsSheet.Headers.ReviewId] }.toSet()
+        val existingIdsSet = existingReviews.mapNotNull { it.reviewId }.toSet()
         this.filter { review ->
-          review[ReviewsSheet.Headers.ReviewId]?.let { id ->
-            // if review has a non-null id, use it to check if id already exists
+          // if review has a non-null id, use it to check if id already exists
+          review.reviewId?.let { id ->
             !existingIdsSet.contains(id)
-          } ?: !existingReviews.contains(review) // otherwise use map key + value structural equality
+          } ?: !existingReviews.contains(review) // otherwise use structural equality
         }
       } ?: this
 
@@ -50,7 +48,7 @@ fun main(args: Array<String>) {
        * @return a list of reviews that were not previously imported into the sheet
        */
       suspend fun getAppleReviews(customer: Customer, app: AppleApp): List<Review> {
-        val existingReviews = reviewsByCustomer[Pair(customer.name, ReviewsSheet.Stores.Apple.name)]
+        val existingReviews = reviewsByCustomer[Pair(customer.name, Stores.Apple.name)]
         val latest = existingReviews.getLatestDate()
 
         logger.info { "Downloading new reviews from Apple Store for customer ${customer.name}" }
@@ -61,7 +59,7 @@ fun main(args: Array<String>) {
           val currentOldest = it.data.minOfOrNull { review -> review.attributes.createdDate }
           if (currentOldest == null || latest == null) true
           else currentOldest >= latest
-        }.map { rowOf(customer, app.resourceId, it) }
+        }.map { Review.of(customer, app.resourceId, it) }
         val newReviews = fetchedReviews.distinctFrom(existingReviews)
 
         logger.info { "Found ${newReviews.size} new reviews from Apple Store for customer ${customer.name}" }
@@ -87,7 +85,7 @@ fun main(args: Array<String>) {
             "No Google Cloud Storage reviews reports bucket URI specified. Previous reviews will not be imported"
           )
         }
-        val existingReviews = reviewsByCustomer[Pair(customer.name, ReviewsSheet.Stores.Google.name)]
+        val existingReviews = reviewsByCustomer[Pair(customer.name, Stores.Google.name)]
 
         logger.info {
           "Retrieving older reviews from Google Cloud Storage bucket ${
@@ -97,7 +95,7 @@ fun main(args: Array<String>) {
 
         val archivedReviews = googlePlayStore.reviews.downloadFromReports(
           app.reviewsReportsBucketUri, app.packageName
-        ).map { rowOf(customer, it) }
+        ).map { Review.of(customer, it) }
 
         logger.info {
           "Found ${archivedReviews.size} reviews from Google Cloud Storage bucket of reviews reports"
@@ -127,12 +125,12 @@ fun main(args: Array<String>) {
        * @return a list of reviews that were not previously imported into the sheet
        */
       suspend fun getRecentGoogleReviews(customer: Customer, app: AndroidApp): List<Review> {
-        val existingReviews = reviewsByCustomer[Pair(customer.name, ReviewsSheet.Stores.Google.name)]
+        val existingReviews = reviewsByCustomer[Pair(customer.name, Stores.Google.name)]
 
         logger.info { "Downloading new reviews from Google Play Store for customer ${customer.name}" }
 
         val fetchedReviews =
-          googlePlayStore.reviews.listAll(app.packageName).map { rowOf(customer, app.packageName, it) }
+          googlePlayStore.reviews.listAll(app.packageName).map { Review.of(customer, app.packageName, it) }
         val newReviews = fetchedReviews.distinctFrom(existingReviews)
 
         logger.info { "Found ${newReviews.size} new reviews from Google Play Store for customer ${customer.name}" }

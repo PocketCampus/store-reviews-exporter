@@ -7,8 +7,166 @@ import io.ktor.http.*
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import utils.getLogger
+import kotlin.reflect.full.memberProperties
+import kotlin.reflect.full.primaryConstructor
 
-typealias Review = Map<ReviewsSheet.Headers, String?>
+/**
+ * String representation of stores in the sheet
+ */
+enum class Stores {
+  Apple,
+  Google,
+}
+
+/**
+ * Represents a review row in the sheet as unordered data class
+ */
+data class Review(
+  val customer: String? = null,
+  val store: String? = null,
+  val appId: String? = null,
+  val reviewId: String? = null,
+  val date: String? = null,
+  val title: String? = null,
+  val body: String? = null,
+  val rating: String? = null,
+  val author: String? = null,
+  val territory: String? = null,
+  val device: String? = null,
+  val thumbsUpCount: String? = null,
+  val thumbsDownCount: String? = null,
+  val androidOsVersion: String? = null,
+  val appVersionCode: String? = null,
+  val appVersionName: String? = null,
+  val deviceProductName: String? = null,
+  val deviceManufacturer: String? = null,
+  val deviceClass: String? = null,
+  val screenWidthPx: String? = null,
+  val screenHeightPx: String? = null,
+  val nativePlatform: String? = null,
+  val screenDensityDpi: String? = null,
+  val glEsVersion: String? = null,
+  val cpuModel: String? = null,
+  val cpuMake: String? = null,
+  val ramMb: String? = null,
+  val replyText: String? = null,
+  val replyDate: String? = null,
+  val misc: String? = null,
+  val reviewLink: String? = null,
+) {
+  companion object {
+    /**
+     * Factory of review row from an Apple CustomerReview
+     */
+    fun of(customer: Customer, resourceId: String, appleReview: AppleAppStore.CustomerReview): Review = Review(
+      customer = customer.name,
+      store = Stores.Apple.toString(),
+      appId = resourceId,
+      reviewId = appleReview.id,
+      date = appleReview.attributes.createdDate.toString(),
+      title = appleReview.attributes.title,
+      body = appleReview.attributes.body,
+      rating = appleReview.attributes.rating.toString(),
+      author = appleReview.attributes.reviewerNickname,
+      territory = appleReview.attributes.territory.toString(),
+    )
+
+    /**
+     * Factory of review row from a Google Play Store review
+     */
+    fun of(customer: Customer, packageName: String, googleReview: GooglePlayStore.Review): Review {
+      val userComments = googleReview.comments.mapNotNull { it.userComment }
+      val developerComments = googleReview.comments.mapNotNull { it.developerComment }
+
+      val review = userComments.minByOrNull { it.lastModified }
+      val reply = developerComments.minByOrNull { it.lastModified }
+
+      return Review(
+        customer = customer.name,
+        store = Stores.Google.toString(),
+        appId = packageName,
+        reviewId = googleReview.reviewId,
+        date = review?.lastModified.toString(),
+        body = review?.text?.trim(),
+        rating = review?.starRating.toString(),
+        author = googleReview.authorName,
+        territory = review?.reviewerLanguage.toString(),
+        device = review?.device.toString(),
+        thumbsUpCount = review?.thumbsUpCount.toString(),
+        thumbsDownCount = review?.thumbsDownCount.toString(),
+        androidOsVersion = review?.androidOsVersion.toString(),
+        appVersionCode = review?.appVersionCode.toString(),
+        appVersionName = review?.appVersionName.toString(),
+        deviceProductName = review?.deviceMetadata?.productName.toString(),
+        deviceManufacturer = review?.deviceMetadata?.manufacturer.toString(),
+        deviceClass = review?.deviceMetadata?.deviceClass.toString(),
+        screenWidthPx = review?.deviceMetadata?.screenWidthPx.toString(),
+        screenHeightPx = review?.deviceMetadata?.screenHeightPx.toString(),
+        nativePlatform = review?.deviceMetadata?.nativePlatform.toString(),
+        screenDensityDpi = review?.deviceMetadata?.screenDensityDpi.toString(),
+        glEsVersion = review?.deviceMetadata?.glEsVersion.toString(),
+        cpuModel = review?.deviceMetadata?.cpuModel.toString(),
+        cpuMake = review?.deviceMetadata?.cpuMake.toString(),
+        ramMb = review?.deviceMetadata?.ramMb.toString(),
+        replyDate = reply?.lastModified.toString(),
+        replyText = reply?.text.toString(),
+        misc = Json.encodeToString(googleReview.comments),
+      )
+    }
+
+    /**
+     * Factory of review row from a Google Cloud Storage Review Report review
+     */
+    fun of(customer: Customer, googleReportReview: GoogleCloudStorageReportReview): Review =
+      Review(customer = customer.name,
+        store = Stores.Google.toString(),
+        appId = googleReportReview.packageName,
+        date = googleReportReview.reviewSubmitDateAndTime,
+        body = googleReportReview.reviewText,
+        appVersionCode = googleReportReview.appVersionCode,
+        appVersionName = googleReportReview.appVersionName,
+        title = googleReportReview.reviewTitle,
+        territory = googleReportReview.reviewerLanguage,
+        device = googleReportReview.device,
+        rating = googleReportReview.starRating,
+        replyDate = googleReportReview.developerReplyDateAndTime,
+        replyText = googleReportReview.developerReplyText,
+        reviewLink = googleReportReview.reviewLink,
+        reviewId = googleReportReview.reviewLink?.let { Url(it).parameters["reviewId"] })
+
+    /**
+     * List of the property names of the Review class as Strings
+     */
+    val properties = Review::class.memberProperties.map { it.name }.toSet()
+
+    /**
+     * Helper for reflection-based instantiation
+     */
+    private val constructor =
+      Review::class.primaryConstructor ?: throw Error("Reflection error: constructor not found for class Review")
+
+    /**
+     * Factory of review row from a single row in the Google Sheet
+     * @param row a map of sheet headers to cell values (note: expects the serialized null markers to be already converted into actual nulls)
+     */
+    fun of(row: Map<String, String?>): Review {
+      val args = row.mapNotNull { (key, value) ->
+        // filter out headers that are not properties
+        val param = constructor.parameters.find { it.name == key }
+        param?.let { it to value }
+      }.toMap()
+      return constructor.callBy(args)
+    }
+  }
+
+  /**
+   * Key-value access to properties, like a map
+   * @return the String value if the property exists, null otherwise
+   */
+  fun get(property: String): String? {
+    return Review::class.memberProperties.find { it.name == property }?.getter?.call(this)?.toString()
+  }
+}
 
 /**
  * Logic and models that handle reviews in the Google Sheet
@@ -17,189 +175,55 @@ typealias Review = Map<ReviewsSheet.Headers, String?>
  *         Copyright (c) 2024 PocketCampus Sàrl
  */
 class ReviewsSheet(val spreadsheet: GoogleSheets.Spreadsheets, val sheetName: String) {
-    private val logger = getLogger()
+  private val logger = getLogger()
 
-    /**
-     * String representation of stores in the sheet
+  companion object {
+    /*
+     * Represents null values as string in a cell
      */
-    enum class Stores {
-        Apple,
-        Google,
+    const val NULL_MARKER = "<null>"
+  }
+
+  /**
+   * Appends the specified rows into the sheet
+   */
+  suspend fun write(reviews: List<Review>) {
+    // retrieve headers at write time
+    val (sheetHeaders, _) = getContent()
+    val localHeaders = Review.properties
+
+    // all the review properties should be contained in the sheet headers
+    if (!sheetHeaders.containsAll(localHeaders)) {
+      logger.error(
+        "The headers of the reviews sheet does not contain all the available properties of the review map!",
+        "This implies that some data will not be written to the sheet and will have to be manually recovered later.",
+        "\t Sheet headers: $sheetHeaders",
+        "\t Row map property names: $localHeaders",
+      )
     }
 
-    /**
-     * Header keys for review rows (used as sheet headers)
-     */
-    enum class Headers {
-        Customer,
-        Store,
-        AppId,
-        ReviewId,
-        Date,
-        Title,
-        Body,
-        Rating,
-        Author,
-        Territory,
-        Device,
-        ThumbsUpCount,
-        ThumbsDownCount,
-        AndroidOsVersion,
-        AppVersionCode,
-        AppVersionName,
-        DeviceProductName,
-        DeviceManufacturer,
-        DeviceClass,
-        ScreenWidthPx,
-        ScreenHeightPx,
-        NativePlatform,
-        ScreenDensityDpi,
-        GlEsVersion,
-        CpuModel,
-        CpuMake,
-        RamMb,
-        ReplyText,
-        ReplyDate,
-        Misc,
-        ReviewLink,
-    }
-
-    companion object {
-        /*
-         * Represents null values as string in a cell
-         */
-        private const val NULL_MARKER = "<null>"
-
-        /**
-         * Factory of review row from an Apple CustomerReview
-         */
-        fun rowOf(customer: Customer, resourceId: String, appleReview: AppleAppStore.CustomerReview): Review = mapOf(
-            Headers.Customer to customer.name,
-            Headers.Store to Stores.Apple.toString(),
-            Headers.AppId to resourceId,
-            Headers.ReviewId to appleReview.id,
-            Headers.Date to appleReview.attributes.createdDate.toString(),
-            Headers.Title to appleReview.attributes.title,
-            Headers.Body to appleReview.attributes.body,
-            Headers.Rating to appleReview.attributes.rating.toString(),
-            Headers.Author to appleReview.attributes.reviewerNickname,
-            Headers.Territory to appleReview.attributes.territory.toString(),
-        )
-
-        /**
-         * Factory of review row from a Google Play Store review
-         */
-        fun rowOf(customer: Customer, packageName: String, googleReview: GooglePlayStore.Review): Review {
-            val userComments = googleReview.comments.mapNotNull { it.userComment }
-            val developerComments = googleReview.comments.mapNotNull { it.developerComment }
-
-            val review = userComments.minByOrNull { it.lastModified }
-            val reply = developerComments.minByOrNull { it.lastModified }
-
-            return mapOf(
-                Headers.Customer to customer.name,
-                Headers.Store to Stores.Google.toString(),
-                Headers.AppId to packageName,
-                Headers.ReviewId to googleReview.reviewId,
-                Headers.Date to review?.lastModified.toString(),
-                Headers.Body to review?.text?.trim(),
-                Headers.Rating to review?.starRating.toString(),
-                Headers.Author to googleReview.authorName,
-                Headers.Territory to review?.reviewerLanguage.toString(),
-                Headers.Device to review?.device.toString(),
-                Headers.ThumbsUpCount to review?.thumbsUpCount.toString(),
-                Headers.ThumbsDownCount to review?.thumbsDownCount.toString(),
-                Headers.AndroidOsVersion to review?.androidOsVersion.toString(),
-                Headers.AppVersionCode to review?.appVersionCode.toString(),
-                Headers.AppVersionName to review?.appVersionName.toString(),
-                Headers.DeviceProductName to review?.deviceMetadata?.productName.toString(),
-                Headers.DeviceManufacturer to review?.deviceMetadata?.manufacturer.toString(),
-                Headers.DeviceClass to review?.deviceMetadata?.deviceClass.toString(),
-                Headers.ScreenWidthPx to review?.deviceMetadata?.screenWidthPx.toString(),
-                Headers.ScreenHeightPx to review?.deviceMetadata?.screenHeightPx.toString(),
-                Headers.NativePlatform to review?.deviceMetadata?.nativePlatform.toString(),
-                Headers.ScreenDensityDpi to review?.deviceMetadata?.screenDensityDpi.toString(),
-                Headers.GlEsVersion to review?.deviceMetadata?.glEsVersion.toString(),
-                Headers.CpuModel to review?.deviceMetadata?.cpuModel.toString(),
-                Headers.CpuMake to review?.deviceMetadata?.cpuMake.toString(),
-                Headers.RamMb to review?.deviceMetadata?.ramMb.toString(),
-                Headers.ReplyDate to reply?.lastModified.toString(),
-                Headers.ReplyText to reply?.text.toString(),
-                Headers.Misc to Json.encodeToString(googleReview.comments),
-            )
+    // write back values in order of existing headers
+    spreadsheet.values.append(
+      ValueRange(sheetName, reviews.map { review ->
+        sheetHeaders.map { header ->
+          review.get(header) ?: NULL_MARKER
         }
+      })
+    )
+  }
 
-        /**
-         * Factory of review row from a Google Cloud Storage Review Report review
-         */
-        fun rowOf(customer: Customer, googleReportReview: GoogleCloudStorageReportReview): Review =
-            mapOf(Headers.Customer to customer.name,
-                Headers.Store to Stores.Google.toString(),
-                Headers.AppId to googleReportReview.packageName,
-                Headers.Date to googleReportReview.reviewSubmitDateAndTime,
-                Headers.Body to googleReportReview.reviewText,
-                Headers.AppVersionCode to googleReportReview.appVersionCode,
-                Headers.AppVersionName to googleReportReview.appVersionName,
-                Headers.Title to googleReportReview.reviewTitle,
-                Headers.Territory to googleReportReview.reviewerLanguage,
-                Headers.Device to googleReportReview.device,
-                Headers.Rating to googleReportReview.starRating,
-                Headers.ReplyDate to googleReportReview.developerReplyDateAndTime,
-                Headers.ReplyText to googleReportReview.developerReplyText,
-                Headers.ReviewLink to googleReportReview.reviewLink,
-                Headers.ReviewId to googleReportReview.reviewLink?.let { Url(it).parameters["reviewId"] })
-
-        /**
-         * Factory of review row from a single row in the Google Sheet
-         */
-        private fun rowOf(values: List<String>, headers: List<String>): Review {
-            val sheetRow = headers.zip(values).associate { (header, value) -> header to value }
-            return Headers.entries.associateWith {
-                val cellValue = sheetRow[it.name]
-                if (cellValue == NULL_MARKER) null else cellValue
-            }
-        }
-
-    }
-
-    /**
-     * Appends the specified rows into the sheet
-     */
-    suspend fun write(rows: List<Review>) {
-        // retrieve headers at write time
-        val (sheetHeaders, _) = getContent()
-        val localHeaders = Headers.entries.map { it.name }
-
-        // all the row properties should be contained in the sheet headers
-        if (!sheetHeaders.containsAll(localHeaders)) {
-            logger.error(
-                "The headers of the reviews sheet does not contain all the available properties of the review map!",
-                "This implies that some data will not be written to the sheet and will have to be manually recovered later.",
-                "\t Sheet headers: $sheetHeaders",
-                "\t Row map property names: $localHeaders",
-            )
-        }
-
-        // write back values in order of existing headers
-        val orderedHeaders = sheetHeaders.mapNotNull { header -> Headers.entries.firstOrNull { it.name == header } }
-
-        spreadsheet.values.append(
-            ValueRange(sheetName, rows.map { row ->
-                orderedHeaders.map {
-                    row[it] ?: NULL_MARKER
-                }
-            })
-        )
-    }
-
-    /**
-     * Gets all reviews stored in the sheet
-     */
-    suspend fun getContent(): Pair<List<String>, List<Review>> {
-        val sheet = spreadsheet.values.get(sheetName).values
-        if (sheet.isNullOrEmpty()) return Pair(listOf(), listOf())
-        val headers = sheet.first()
-        val rows = sheet.drop(1)
-        return Pair(headers, rows.map { rowOf(it, headers) })
-    }
+  /**
+   * Gets all reviews stored in the sheet
+   */
+  suspend fun getContent(): Pair<List<String>, List<Review>> {
+    val sheet = spreadsheet.values.get(sheetName).values
+    if (sheet.isNullOrEmpty()) return Pair(listOf(), listOf())
+    val headers = sheet.first()
+    val rows = sheet.drop(1)
+    return Pair(headers, rows.map { row ->
+      // replace null markers by effective null
+      val map = headers.zip(row).associate { (header, value) -> header to if (value == NULL_MARKER) null else value }
+      Review.of(map)
+    })
+  }
 }
