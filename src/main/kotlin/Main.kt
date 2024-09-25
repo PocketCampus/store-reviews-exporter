@@ -179,11 +179,15 @@ fun main(args: Array<String>) {
 
       // log all failures for convenience
       val failures = results.mapNotNull { it.fold(onSuccess = { null }, onFailure = { error -> error }) }
-      failures.forEach {
-        logger.error(it.toString())
+      if (failures.isNotEmpty()) {
+        logger.info { "Logging all recoverable failures that occurred during data fetching as errors:" }
+        failures.forEach {
+          logger.error(it.toString())
+        }
       }
 
       if (newReviews.isNotEmpty() || failures.isNotEmpty()) {
+        logger.info { "Reporting summary to Slack" }
         val stats = if (newReviews.isNotEmpty()) computeStats(newReviews) else null
         slack.sendOrThrow(slackWebhook) {
           blocks {
@@ -191,9 +195,12 @@ fun main(args: Array<String>) {
           }
         }
         responses.forEach { (customer, stores) ->
-          slack.sendOrThrow(slackWebhook) {
-            blocks {
-              reportCustomer(customer, stores, this)
+          if (stores.values.any { result -> result.fold(onSuccess = { it.isNotEmpty() }, onFailure = { true }) }) {
+            logger.info { "Reporting customer ${customer.name} to Slack: $stores" }
+            slack.sendOrThrow(slackWebhook) {
+              blocks {
+                reportCustomer(customer, stores, this)
+              }
             }
           }
         }

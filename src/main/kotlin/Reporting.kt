@@ -22,7 +22,7 @@ import kotlin.math.roundToInt
 fun Slack.sendOrThrow(url: String, configurePayload: PayloadBuilder.() -> Unit): WebhookResponse {
   val response = this.send(url, configurePayload)
   if (response == null || response.code >= 400) {
-    throw Error("Failed to send Slack message: ${response?.body ?: ""} ($response)")
+    throw Error("Failed to send Slack message: ${response?.apply { "$code $body" } ?: ""}")
   }
   return response
 }
@@ -188,26 +188,24 @@ fun reportCustomer(customer: Customer, storeReviews: Map<String, Result<List<Rev
   blocksBuilder.apply {
     val allReviews =
       storeReviews.values.flatMap { it.fold(onSuccess = { reviews -> reviews }, onFailure = { listOf() }) }
-    if (storeReviews.values.any { it.isFailure } || allReviews.isNotEmpty()) {
-      divider()
-      section {
-        markdownText(buildString {
-          append("📱 *${customer.name}*")
-          if (allReviews.isNotEmpty()) {
-            val stats = computeStats(allReviews)
-            append(
-              "\nAverage rating of imported reviews for this customer: ${stats.average.toRatingStars()} (${
-                String.format(
-                  "%.2f", stats.average
-                )
-              })"
-            )
-          }
-        })
-      }
-      storeReviews.forEach { (store, result) ->
-        reportStore(store, result, blocksBuilder)
-      }
+    divider()
+    section {
+      markdownText(buildString {
+        append("📱 *${customer.name}*")
+        if (allReviews.isNotEmpty()) {
+          val stats = computeStats(allReviews)
+          append(
+            "\nAverage rating of imported reviews for this customer: ${stats.average.toRatingStars()} (${
+              String.format(
+                "%.2f", stats.average
+              )
+            })"
+          )
+        }
+      })
+    }
+    storeReviews.forEach { (store, result) ->
+      reportStore(store, result, blocksBuilder)
     }
   }
 }
