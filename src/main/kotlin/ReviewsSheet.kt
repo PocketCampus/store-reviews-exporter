@@ -208,7 +208,9 @@ class ReviewsSheet(val spreadsheet: GoogleSheets.Spreadsheets, val sheetName: St
         sheetHeaders.map { header ->
           review.get(header) ?: NULL_MARKER
         }
-      })
+      }),
+      // IMPORTANT! write value input as RAW otherwise Google Sheets performs some conversion shenanigans (e.g 2.0 -> 2)
+      valueInputOption = GoogleSheets.ValueInputOption.RAW
     )
   }
 
