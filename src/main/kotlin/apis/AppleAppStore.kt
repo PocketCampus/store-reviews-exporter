@@ -111,7 +111,7 @@ interface AppleAppStore {
             }
             install(Logging) {
                 logger = Logger.SIMPLE
-                level = LogLevel.NONE
+                level = LogLevel.BODY
             }
         }
 
