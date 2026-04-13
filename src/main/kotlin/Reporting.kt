@@ -132,7 +132,7 @@ fun reportReview(review: Review, blocksBuilder: LayoutBlockDsl) {
 /**
  * Formats a Slack message fragment for a set of reviews in a given store for a customer
  */
-fun reportStore(store: String, result: Result<List<Review>>, blocksBuilder: LayoutBlockDsl) {
+fun reportStore(store: String, result: Result<List<Review>>, logAllWarnings: Boolean, blocksBuilder: LayoutBlockDsl) {
   blocksBuilder.apply {
     result.fold(onSuccess = { reviews ->
       if (reviews.isEmpty()) {
@@ -170,11 +170,13 @@ fun reportStore(store: String, result: Result<List<Review>>, blocksBuilder: Layo
         reportReview(it, blocksBuilder)
       }
     }, onFailure = { error ->
-      section {
-        markdownText(buildString {
-          append("️🛑 Encountered the following error while fetching reviews on $store:")
-          append("\n```${error.message}```")
-        })
+      if (logAllWarnings || !isWarning(error)) {
+        section {
+          markdownText(buildString {
+            append("️🛑 Encountered the following error while fetching reviews on $store:")
+            append("\n```${error.message}```")
+          })
+        }
       }
     })
   }
@@ -184,7 +186,7 @@ fun reportStore(store: String, result: Result<List<Review>>, blocksBuilder: Layo
 /**
  * Formats a Slack message fragment for a customer
  */
-fun reportCustomer(customer: Customer, storeReviews: Map<String, Result<List<Review>>>, blocksBuilder: LayoutBlockDsl) {
+fun reportCustomer(customer: Customer, storeReviews: Map<String, Result<List<Review>>>, logAllWarnings: Boolean, blocksBuilder: LayoutBlockDsl) {
   blocksBuilder.apply {
     val allReviews =
       storeReviews.values.flatMap { it.fold(onSuccess = { reviews -> reviews }, onFailure = { listOf() }) }
@@ -205,7 +207,7 @@ fun reportCustomer(customer: Customer, storeReviews: Map<String, Result<List<Rev
       })
     }
     storeReviews.forEach { (store, result) ->
-      reportStore(store, result, blocksBuilder)
+      reportStore(store, result, logAllWarnings, blocksBuilder)
     }
   }
 }

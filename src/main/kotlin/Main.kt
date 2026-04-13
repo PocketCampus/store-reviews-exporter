@@ -8,7 +8,7 @@ import utils.of
 fun main(args: Array<String>) {
   runBlocking {
     val slack = Slack.getInstance()
-    val (googleSpreadsheetId, googlePrivateKeyPath, applePrivateKeysPaths, slackWebhook) = Args.parse(args)
+    val (googleSpreadsheetId, googlePrivateKeyPath, applePrivateKeysPaths, slackWebhook, logAllWarnings) = Args.parse(args)
 
     try {
       val logger = getLogger()
@@ -81,8 +81,8 @@ fun main(args: Array<String>) {
         app: AndroidApp,
       ): List<Review> {
         if (app.reviewsReportsBucketUri == null) {
-          throw Error(
-            "No Google Cloud Storage reviews reports bucket URI specified. Previous reviews will not be imported"
+          throw MissingGCSBucketError(
+            message = "No Google Cloud Storage reviews reports bucket URI specified. Previous reviews will not be imported"
           )
         }
         val existingReviews = reviewsByCustomer[Pair(customer.name, Stores.Google.name)]
@@ -185,7 +185,7 @@ fun main(args: Array<String>) {
         }
       }
 
-      if (newReviews.isNotEmpty() || failures.isNotEmpty()) {
+      if (newReviews.isNotEmpty() || (failures.isNotEmpty() && (logAllWarnings || !failures.all { isWarning(it) }))) {
         logger.info { "Reporting summary to Slack" }
         val stats = if (newReviews.isNotEmpty()) computeStats(newReviews) else null
         slack.sendOrThrow(slackWebhook) {
@@ -198,7 +198,7 @@ fun main(args: Array<String>) {
             logger.info { "Reporting customer ${customer.name} to Slack: $stores" }
             slack.sendOrThrow(slackWebhook) {
               blocks {
-                reportCustomer(customer, stores, this)
+                reportCustomer(customer, stores, logAllWarnings, this)
               }
             }
           }

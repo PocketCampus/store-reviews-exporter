@@ -11,6 +11,7 @@ data class Args(
   val googlePrivateKeyPath: String,
   val applePrivateKeyPath: Set<String>,
   val slackWebhook: String,
+  val logAllWarnings: Boolean,
 ) {
   companion object {
     /**
@@ -53,17 +54,25 @@ data class Args(
         }
       }.groupBy({ (key, _) -> key }, { (_, value) -> value }) // group all passed values by flag
 
-      /*
-        Returns the list of argument values for a given flag
+      /**
+       * Returns the list of argument values for a given flag, or else null
        */
-      fun <V> Map<String, V>.valueList(prop: KProperty<Any>) =
-        this[prop.toFlag()] ?: throw Error("Argument ${prop.toFlag()} was not specified")
+      fun <V> Map<String, V>.valueListOrNull(prop: KProperty<Any>) =
+        this[prop.toFlag()]
 
+      /*
+        Returns the list of argument values for a given flag, or else throws
+       */
+      fun <V> Map<String, V>.valueListOrThrow(prop: KProperty<Any>) =
+        valueListOrNull(prop) ?: throw Error("Argument ${prop.toFlag()} was not specified")
+        
+      // for single value args, we usually want the last
       return Args(
-        options.valueList(Args::googleSpreadsheetId).last(),
-        options.valueList(Args::googlePrivateKeyPath).last(),
-        options.valueList(Args::applePrivateKeyPath).toSet(),
-        options.valueList(Args::slackWebhook).last(),
+        options.valueListOrThrow(Args::googleSpreadsheetId).last(),
+        options.valueListOrThrow(Args::googlePrivateKeyPath).last(),
+        options.valueListOrThrow(Args::applePrivateKeyPath).toSet(),
+        options.valueListOrThrow(Args::slackWebhook).last(),
+        options.valueListOrNull(Args::logAllWarnings)?.last()?.toBoolean() ?: false,
       )
     }
   }

@@ -1,0 +1,1 @@
+class MissingGCSBucketError(message: String) : Error(message)

@@ -126,7 +126,7 @@ data class Config(
 
                 val apple = Result.of {
                     if (resourceId.isNullOrEmpty()) {
-                        throw Error("")
+                        throw Error("Resource id is null or empty")
                     }
                     if (keyId.isNullOrEmpty() || issuerId.isNullOrEmpty()) {
                         throw Error(
