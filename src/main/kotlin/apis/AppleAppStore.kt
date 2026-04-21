@@ -12,13 +12,27 @@ import io.ktor.serialization.kotlinx.json.*
 import kotlinx.datetime.Clock.System
 import kotlinx.datetime.Instant
 import kotlinx.datetime.toJavaInstant
+import kotlinx.serialization.DeserializationStrategy
+import kotlinx.serialization.KSerializer
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.SerializationException
+import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonContentPolymorphicSerializer
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.decodeFromJsonElement
+import kotlinx.serialization.descriptors.SerialDescriptor
+import kotlinx.serialization.descriptors.buildClassSerialDescriptor
+import kotlinx.serialization.encoding.Decoder
+import kotlinx.serialization.encoding.Encoder
+import kotlinx.serialization.json.JsonDecoder
 import java.io.File
 import java.security.KeyFactory
 import java.security.PrivateKey
 import java.security.spec.PKCS8EncodedKeySpec
 import java.util.*
+import kotlin.reflect.KClass
 import kotlin.time.Duration.Companion.minutes
 
 /**
@@ -118,20 +132,96 @@ interface AppleAppStore {
         /**
          * https://developer.apple.com/documentation/appstoreconnectapi/list_all_customer_reviews_for_an_app
          */
-        suspend fun getCustomerReviews(resourceId: String, paginationLink: String? = null) = client.get(
-            paginationLink ?: "https://api.appstoreconnect.apple.com/v1/apps/$resourceId/customerReviews"
-        ) {
+        suspend fun getCustomerReviews(resourceId: String, paginationLink: String? = null): CustomerReviewsResponse = 
+            get(paginationLink ?: "https://api.appstoreconnect.apple.com/v1/apps/$resourceId/customerReviews") {
+                if (paginationLink == null) {
+                    parameter("sort", "-createdDate")
+                    parameter("limit", 200)
+                }
+            }
+
+        /**
+         * Helper method to make GET requests to the Apple App Store API
+         */
+        private suspend inline fun <reified T : Any> get(
+            url: String,
+            crossinline block: HttpRequestBuilder.() -> Unit = {}
+        ): T = client.get(url) {
             headers {
-                append(
-                    HttpHeaders.Authorization, "Bearer ${credentials.getOrRefreshToken()}"
-                )
+                append(HttpHeaders.Authorization, "Bearer ${credentials.getOrRefreshToken()}")
             }
-            if (paginationLink == null) {
-                // parameters should already be set on pagination link if it exists
-                parameter("sort", "-createdDate")
-                parameter("limit", 200)
+            block()
+        }.body<Response<T>>().let { response ->
+            when (response) {
+                is Response.Success -> response.data
+                is Response.Failure -> throw ApiException(response.errorResponse.errors)
             }
-        }.body<CustomerReviewsResponse>()
+        }
+    }
+
+    /**
+     * Wrapper to handle both success and error responses
+     */
+    @Serializable(with = ResponseSerializer::class)
+    sealed class Response<out T> {
+        @Serializable
+        data class Success<T>(val data: T) : Response<T>()
+
+        @Serializable
+        data class Failure(val errorResponse: ErrorResponse) : Response<Nothing>()
+    }
+
+    /**
+     * Custom serializer to handle both success and error responses
+     */
+    @Suppress("UNCHECKED_CAST")
+    class ResponseSerializer<T : Any>(private val dataSerializer: KSerializer<T>) : KSerializer<Response<T>> {
+        override val descriptor: SerialDescriptor = buildClassSerialDescriptor("Response")
+
+        override fun deserialize(decoder: Decoder): Response<T> {
+            val input = decoder as? JsonDecoder ?: throw SerializationException("Only JSON is supported")
+            val element = input.decodeJsonElement()
+            val jsonObject = element.jsonObject
+
+            if ("errors" in jsonObject) {
+                val errorResponse = input.json.decodeFromJsonElement(ErrorResponse.serializer(), element)
+                return Response.Failure(errorResponse)
+            }
+
+            // Apple success responses are the data objects themselves, which we wrap into Success
+            val data = input.json.decodeFromJsonElement(dataSerializer, element)
+            return Response.Success(data)
+        }
+
+        override fun serialize(encoder: Encoder, value: Response<T>) {
+            throw SerializationException("Serialization of Response is not supported")
+        }
+    }
+
+    /**
+     * Exception thrown when the Apple App Store API returns an error response
+     */
+    class ApiException(val errors: List<ErrorResponse.Error>) : Exception(
+        "Apple App Store API error(s): ${errors.joinToString(", ") { it.title }}"
+    )
+
+    /**
+     * https://developer.apple.com/documentation/appstoreconnectapi/errorresponse
+     */
+    @Serializable
+    data class ErrorResponse(val errors: List<Error>) {
+        /**
+         * https://developer.apple.com/documentation/appstoreconnectapi/errorresponse/errors-data.dictionary
+         */
+        @Serializable
+        data class Error(
+            val id: String,
+            val status: Int,
+            val code: String,
+            val detail: String,
+            val title: String,
+            val links: Map<String, String>?,
+        )
     }
 
     /**

@@ -194,7 +194,7 @@ fun main(args: Array<String>) {
           }
         }
         responses.forEach { (customer, stores) ->
-          if (stores.values.any { result -> result.fold(onSuccess = { it.isNotEmpty() }, onFailure = { true }) }) {
+          if (stores.values.any { result -> result.fold(onSuccess = { it.isNotEmpty() }, onFailure = { logAllWarnings || !isWarning(it) }) }) {
             logger.info { "Reporting customer ${customer.name} to Slack: $stores" }
             slack.sendOrThrow(slackWebhook) {
               blocks {
