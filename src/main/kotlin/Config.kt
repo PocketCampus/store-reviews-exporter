@@ -2,7 +2,7 @@ import apis.AppleAppStore
 import apis.GoogleSheets
 import com.google.auth.oauth2.GoogleCredentials
 import utils.*
-import Args.Companion.toFlag
+import Args.Companion.toEnvVar
 import java.io.File
 
 /** A row in the customer config sheet, mapped to respective headers */
@@ -134,7 +134,7 @@ data class Config(
                         )
                     }
                     val privateKeyPath = applePrivateKeysPaths.find { path -> path.contains(keyId) } ?: throw Error(
-                        "No Apple App Store Connect private key path specified for $packageName with resource ID $resourceId (issuer ID: $issuerId, key ID: $keyId from spreadsheet config). Did you provide the corresponding key file path with ${Args::applePrivateKeyPath.toFlag()} and is the file correctly named AuthKey_$keyId.p8 ?"
+                        "No Apple App Store Connect private key path specified for $packageName with resource ID $resourceId (issuer ID: $issuerId, key ID: $keyId from spreadsheet config). Did you provide the corresponding key file path in ${Args::applePrivateKeyPaths.toEnvVar()} and is the file correctly named AuthKey_$keyId.p8 ?"
                     )
                     AppleApp(
                         resourceId, AppleAppStore.ConnectCredentials(privateKeyPath, keyId, issuerId)
