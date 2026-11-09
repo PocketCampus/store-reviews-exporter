@@ -103,9 +103,10 @@ class ArgsTest {
       "APPLE_PRIVATE_KEY_PATH" to "/secrets/single-apple.p8",
       "SLACK_WEBHOOK" to "https://hooks.slack.com/env",
     )
-    assertFailsWith<IllegalArgumentException> {
+    val ex1 = assertFailsWith<IllegalArgumentException> {
       Args.parse(emptyArray(), env1)
     }
+    assertTrue(ex1.message!!.contains("APPLE_PRIVATE_KEY_PATHS"))
 
     // Single env var SLACK_WEBHOOK must be used, not SLACK_WEBHOOK_URL
     val env2 = mapOf(
@@ -114,9 +115,10 @@ class ArgsTest {
       "APPLE_PRIVATE_KEY_PATHS" to "/secrets/apple.p8",
       "SLACK_WEBHOOK_URL" to "https://hooks.slack.com/url",
     )
-    assertFailsWith<IllegalArgumentException> {
+    val ex2 = assertFailsWith<IllegalArgumentException> {
       Args.parse(emptyArray(), env2)
     }
+    assertTrue(ex2.message!!.contains("SLACK_WEBHOOK"))
   }
 
   @Test

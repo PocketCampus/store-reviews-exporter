@@ -85,19 +85,29 @@ Make sure that you have a JDK distribution installed (the tool has been tested s
 
 Then run the exporter with the following command (replace the argument values by your own from above):
 
-```shell
-# linux / macos (on windows replace gradlew with gradlew.bat)
-./gradlew run --args="--slackWebhook https://hooks.slack.com/<your-url> --googleSpreadsheetId <google-spreadsheet-id> --googlePrivateKeyPath 'path/to/google-key-file.json' --applePrivateKeyPath 'path/to/AuthKey_<keyid1>.p8' # repeat --applePrivateKeyPath for all your Apple keys"
+```bash
+# Linux / macOS
+SLACK_WEBHOOK='https://hooks.slack.com/<your-url>' \
+GOOGLE_PRIVATE_KEY_PATH='path/to/google-key-file.json' \
+APPLE_PRIVATE_KEY_PATHS='path/to/AuthKey_<keyid1>.p8:path/to/AuthKey_<keyid2>.p8' \
+./gradlew run --args="--googleSpreadsheetId <google-spreadsheet-id>"
+
+# Windows (PowerShell)
+$env:SLACK_WEBHOOK='https://hooks.slack.com/<your-url>'
+$env:GOOGLE_PRIVATE_KEY_PATH='path/to/google-key-file.json'
+$env:APPLE_PRIVATE_KEY_PATHS='path/to/AuthKey_<keyid1>.p8;path/to/AuthKey_<keyid2>.p8'
+.\gradlew.bat run --args="--googleSpreadsheetId <google-spreadsheet-id>"
 ```
 
-#### List of command line arguments:
+#### Configuration parameters:
 
-| Name                     | Description                                                                                                                                                                                                   |
-|--------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `--slackWebhook`         | The Slack webhook URL to which the summary message will be sent for the Slack app created earlier                                                                                                             |
-| `--googleSpreadsheetId`  | The Google Spreadsheet ID of the spreadsheet created earlier which contains your "Config" sheet with parameters and "Reviews" sheet where the reviews will be written                                         |
-| `--googlePrivateKeyPath` | The path to the Google Service Account private key (JSON format) downloaded earlier                                                                                                                           |
-| `--applePrivateKeyPath`  | The path to the Apple Store Connect API private key file (p8 format) downloaded earlier for a specific publisher account. Repeat the argument as many times as the number of customer keys downloaded earlier |
+| Setting | Type | Method | Description |
+|---|---|---|---|
+| `GOOGLE_SPREADSHEET_ID` | Non-sensitive | CLI flag `--googleSpreadsheetId` or env var | The Google Spreadsheet ID containing "Config" and "Reviews" sheets. |
+| `GOOGLE_PRIVATE_KEY_PATH` | Sensitive | Environment variable | Path to the Google Service Account private key JSON file. |
+| `APPLE_PRIVATE_KEY_PATHS` | Sensitive | Environment variable | Colon-separated (`:`) or comma-separated list of paths to Apple Store Connect API private key (`.p8`) files. |
+| `SLACK_WEBHOOK` | Sensitive | Environment variable | The Slack webhook URL to which the summary message is posted. |
+| `LOG_ALL_WARNINGS` | Non-sensitive | CLI flag `--logAllWarnings` or env var | Boolean (`true`/`false`) to enable verbose logging of all review extraction warnings. |
 
 ### Periodic retrieval in Jenkins
 
@@ -115,8 +125,8 @@ For convenience, we provide a [Jenkinsfile](Jenkinsfile) pipeline to automate th
 6. In the "Pipeline" section, under "Definition" select "Pipeline script"
 7. Copy and adapt the code from [Jenkinsfile](Jenkinsfile):
     - Update the credentials IDs in the `credentials('<id>')` calls with the values from step 2
-    - List your Apple app keys and retrieve them from your credentials as well
-    - Repeat the `--applePrivateKeyPath` with the variables that you just defined for each Apple Store Connect API private key file
+    - Concatenate secret Apple key files with colons (`:`) in the `APPLE_PRIVATE_KEY_PATHS` environment variable
+    - Sensitive credentials are automatically read from the environment variables without CLI arguments
 
 ## License
 

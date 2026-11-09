@@ -67,7 +67,7 @@ data class Args(
           // every even index (starting at 0) argument should be a flag name
           if (!isFlag) {
             if (value in rejectedSensitiveFlags) {
-              val expectedEnv = value.removePrefix("--").replace(Regex("([a-z])([A-Z])"), "$1_$2").uppercase()
+              val expectedEnv = sensitiveProperties.first { it.toFlag() == value }.toEnvVar()
               throw IllegalArgumentException("Sensitive parameter '$value' is not accepted as a CLI argument. Pass it via environment variable $expectedEnv instead. $helpMessage")
             }
             throw IllegalArgumentException("Wrong argument flag at index $index: $value. Should be one of $allowedFlags. $helpMessage")
